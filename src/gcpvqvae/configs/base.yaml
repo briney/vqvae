@@ -1,0 +1,6 @@
+# Base configuration for full-scale training (stub).
+model:
+  latent_dim: 256
+training:
+  batch_size: 32
+  epochs: 100
