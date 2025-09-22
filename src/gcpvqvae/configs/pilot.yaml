@@ -1,6 +1,59 @@
-# Pilot configuration for smoke tests (stub).
+# Pilot-scale configuration for quick tests.
+# Based on Section 4.2 of the workplan.
+
+data:
+  root: "data/pilot"
+  length_cap: 512
+  k_neighbors: 12
+  num_workers: 4
+
 model:
-  latent_dim: 128
-training:
+  gcp:
+    in_h_dim: 6
+    in_v_dim: 3
+    in_e_dim: 8
+    in_ev_dim: 1
+    num_layers: 3
+    hidden_s_dim: 64
+    hidden_v_dim: 8
+    hidden_e_dim: 16
+    out_vq_dim: 128
+
+  enc:
+    d_model: 384
+    depth: 4
+    heads_q: 6
+    heads_kv: 2
+    d_vq: 128 # Should match gcp.out_vq_dim
+
+  vq:
+    K: 512
+    d_vq: 128 # Should match the output of the encoder transformer
+    beta_commit: 0.25
+    ema_decay: 0.99
+    orth_weight: 1.0
+
+  dec:
+    d_model: 384
+    depth: 6
+    heads_q: 6
+    heads_kv: 1
+    d_vq: 128 # Should match the output of the VQ
+
+  decoder_head:
+    d_model: 384 # Should match dec.d_model
+    alpha: 1.0
+
+  loss:
+    lambda_mse: 1.0
+    lambda_dist: 1.0
+    lambda_dir: 1.0
+
+train:
+  epochs: 3
   batch_size: 4
-  epochs: 2
+  lr: 3.0e-4
+  warmup_steps: 500
+  use_amp: true
+  clip_grad_norm: 1.0
+  save_path: "runs/pilot_ckpt.pt"
