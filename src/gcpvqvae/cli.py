@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import argparse
 import sys
 from pathlib import Path
 
+import click
 import numpy as np
 import torch
 import yaml
@@ -28,28 +28,35 @@ def _load_model_from_checkpoint(ckpt_path: str, device: str) -> tuple[GCPVQVAE, 
     return model, cfg
 
 
-def encode_cmd() -> None:
-    """Encode protein backbones to VQ tokens."""
-    parser = argparse.ArgumentParser(description="Encode a protein chain to discrete tokens.")
-    parser.add_argument("input_path", type=Path, help="Path to the input PDB or mmCIF file.")
-    parser.add_argument("--chain", required=True, help="The chain ID to process.")
-    parser.add_argument("--out", type=Path, required=True, help="Path to the output .npz file.")
-    parser.add_argument("--checkpoint", type=Path, required=True, help="Path to the model checkpoint.")
-    parser.add_argument("--device", default="cpu", help="Device to run the model on (e.g., 'cuda:0').")
-    args = parser.parse_args()
+@click.group(name="gpcvq")
+def main() -> None:
+    """
+    A command-line toolkit for training and using GCP-VQVAE models
+    for protein backbone tokenization.
+    """
+    pass
 
-    model, cfg = _load_model_from_checkpoint(str(args.checkpoint), args.device)
 
-    print(f"Encoding {args.input_path} chain {args.chain}...")
+@main.command()
+@click.argument("input_path", type=click.Path(exists=True, path_type=Path))
+@click.option("--chain", required=True, help="The chain ID to process.")
+@click.option("--out", type=click.Path(path_type=Path), required=True, help="Path to the output .npz file.")
+@click.option("--checkpoint", type=click.Path(exists=True, path_type=Path), required=True, help="Path to the model checkpoint.")
+@click.option("--device", default="cpu", help="Device to run the model on (e.g., 'cuda:0').")
+def encode(input_path, chain, out, checkpoint, device) -> None:
+    """Encode a protein backbone to VQ tokens."""
+    model, cfg = _load_model_from_checkpoint(str(checkpoint), device)
+
+    click.echo(f"Encoding {input_path} chain {chain}...")
     max_len = cfg.get('data', {}).get('length_cap', 2048)
-    result = model.encode(str(args.input_path), args.chain, max_length=max_len)
+    result = model.encode(str(input_path), chain, max_length=max_len)
 
     if result is None:
-        print(f"Error: Could not process {args.input_path} chain {args.chain}.", file=sys.stderr)
+        click.echo(f"Error: Could not process {input_path} chain {chain}.", err=True)
         sys.exit(1)
 
     np.savez(
-        args.out,
+        out,
         tokens=result['tokens'],
         mask=result['mask'],
         pose_header_R=result['pose_header'][0],
@@ -58,38 +65,36 @@ def encode_cmd() -> None:
         aatype=result['aatype'],
         input_format=result['input_format'],
     )
-    print(f"Successfully saved tokens to {args.out}")
+    click.echo(f"Successfully saved tokens to {out}")
 
 
-def decode_cmd() -> None:
+@main.command()
+@click.argument("input_npz", type=click.Path(exists=True, path_type=Path))
+@click.option(
+    "--out",
+    type=click.Path(path_type=Path),
+    required=False,
+    help=(
+        "Path to the output file. If not specified, it will be automatically inferred "
+        "from the input file name and format (e.g., input.pdb -> input_decoded.pdb)."
+    ),
+)
+@click.option("--checkpoint", type=click.Path(exists=True, path_type=Path), required=True, help="Path to the model checkpoint.")
+@click.option("--device", default="cpu", help="Device to run the model on (e.g., 'cuda:0').")
+def decode(input_npz, out, checkpoint, device) -> None:
     """Decode VQ tokens to backbone coordinates."""
-    parser = argparse.ArgumentParser(description="Decode discrete tokens to a protein structure.")
-    parser.add_argument("input_npz", type=Path, help="Path to the input .npz file.")
-    parser.add_argument(
-        "--out",
-        type=Path,
-        required=False,
-        help=(
-            "Path to the output file. If not specified, it will be automatically inferred "
-            "from the input file name and format (e.g., input.pdb -> input_decoded.pdb)."
-        ),
-    )
-    parser.add_argument("--checkpoint", type=Path, required=True, help="Path to the model checkpoint.")
-    parser.add_argument("--device", default="cpu", help="Device to run the model on (e.g., 'cuda:0').")
-    args = parser.parse_args()
+    model, _ = _load_model_from_checkpoint(str(checkpoint), device)
 
-    model, _ = _load_model_from_checkpoint(str(args.checkpoint), args.device)
-
-    print(f"Decoding {args.input_npz}...")
-    data = np.load(args.input_npz, allow_pickle=True)
+    click.echo(f"Decoding {input_npz}...")
+    data = np.load(input_npz, allow_pickle=True)
     tokens = data['tokens']
     pose_header = (data['pose_header_R'], data['pose_header_t'])
 
     # Determine output path
-    out_path = args.out
+    out_path = out
     if out_path is None:
         input_format = str(data.get('input_format', 'cif')) # Default to cif for old files
-        out_path = args.input_npz.with_name(f"{args.input_npz.stem}_decoded.{input_format}")
+        out_path = input_npz.with_name(f"{input_npz.stem}_decoded.{input_format}")
 
     result = model.decode(tokens, pose_header=pose_header)
 
@@ -100,25 +105,21 @@ def decode_cmd() -> None:
         chain_id=str(data['chain_id']),
         path=str(out_path),
     )
-    print(f"Successfully saved decoded structure to {out_path}")
+    click.echo(f"Successfully saved decoded structure to {out_path}")
 
 
-def train_cmd() -> None:
+@main.command()
+@click.option("--config", type=click.Path(exists=True, path_type=Path), required=True, help="Path to the training config YAML file.")
+@click.option("--seed", type=int, default=42, help="Random seed for reproducibility.")
+def train(config, seed) -> None:
     """Train the model from a configuration file."""
-    parser = argparse.ArgumentParser(description="Train the GCP-VQVAE model.")
-    parser.add_argument("--config", type=Path, required=True, help="Path to the training config YAML file.")
-    parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility.")
-    args = parser.parse_args()
-
-    seed_everything(args.seed)
-    train_from_config(str(args.config))
+    seed_everything(seed)
+    train_from_config(str(config))
 
 
-def eval_cmd() -> None:
+@main.command()
+@click.option("--config", type=click.Path(exists=True, path_type=Path), required=True, help="Path to the evaluation config YAML file.")
+@click.option("--checkpoint", type=click.Path(exists=True, path_type=Path), required=True, help="Path to the model checkpoint to evaluate.")
+def eval(config, checkpoint) -> None:
     """Evaluate a trained model checkpoint."""
-    parser = argparse.ArgumentParser(description="Evaluate a trained GCP-VQVAE model.")
-    parser.add_argument("--config", type=Path, required=True, help="Path to the evaluation config YAML file.")
-    parser.add_argument("--checkpoint", type=Path, required=True, help="Path to the model checkpoint to evaluate.")
-    args = parser.parse_args()
-
-    evaluate_from_config(str(args.config), str(args.checkpoint))
+    evaluate_from_config(str(config), str(checkpoint))
