@@ -25,10 +25,9 @@ dependencies = [
     "biopython",
     "pyyaml",
     "tensorboard",
+    "click",
+    "tqdm",
 ]
 
 [project.scripts]
-gcpvq-encode = "gcpvqvae.cli:encode_cmd"
-gcpvq-decode = "gcpvqvae.cli:decode_cmd"
-gcpvq-train  = "gcpvqvae.cli:train_cmd"
-gcpvq-eval   = "gcpvqvae.cli:eval_cmd"
+gpcvq = "gcpvqvae.cli:main"
