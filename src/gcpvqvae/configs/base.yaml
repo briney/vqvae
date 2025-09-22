@@ -1,6 +1,60 @@
-# Base configuration for full-scale training (stub).
+# Full-scale configuration based on the GCP-VQVAE paper (Section 8, Tables 4-5).
+
+data:
+  root: "data/main"
+  length_cap: 2048 # Max length from paper
+  k_neighbors: 16   # Default from workplan
+  num_workers: 8
+
 model:
-  latent_dim: 256
-training:
-  batch_size: 32
-  epochs: 100
+  gcp:
+    in_h_dim: 6
+    in_v_dim: 3
+    in_e_dim: 8
+    in_ev_dim: 1
+    num_layers: 6
+    hidden_s_dim: 128
+    hidden_v_dim: 16
+    hidden_e_dim: 32
+    out_vq_dim: 256
+
+  enc:
+    d_model: 1024
+    depth: 12
+    heads_q: 12
+    heads_kv: 3
+    d_vq: 256 # Input dim from GCPNet
+
+  vq:
+    K: 4096
+    d_vq: 256 # VQ operates on the projected dimension
+    beta_commit: 0.25 # Using Stage-2 value as default
+    ema_decay: 0.995  # Using Stage-2 value as default
+    orth_weight: 10.0
+
+  dec:
+    d_model: 1024
+    depth: 16
+    heads_q: 16
+    heads_kv: 1
+    d_vq: 256 # Input dim from VQ
+
+  decoder_head:
+    d_model: 1024 # Input from decoder transformer
+    alpha: 1.0
+
+  loss:
+    lambda_mse: 5.0e-3
+    lambda_dist: 1.0e-2
+    lambda_dir: 5.0e-2
+
+train:
+  # Stage-2 parameters
+  epochs: 100 # Placeholder, training is step-based
+  total_steps: 1500000
+  batch_size: 4
+  lr: 5.0e-5
+  warmup_steps: 16000
+  use_amp: true
+  clip_grad_norm: 1.0
+  save_path: "runs/base_ckpt.pt"

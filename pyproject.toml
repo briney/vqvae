@@ -1,17 +1,21 @@
 [build-system]
-requires = ["setuptools>=64", "wheel"]
+requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "vqvae"
-version = "0.1.0"
-description = "Geometry-complete protein VQVAE with GCPNet encoder"
-readme = "README.md"
+name = "gcpvqvae"
+version = "0.0.1"
 authors = [
-    { name = "Bryan Briney" }
+  { name="Jules", email="jules@example.com" },
 ]
-license = { file = "LICENSE" }
-requires-python = ">=3.10"
+description = "A PyTorch implementation of GCP-VQVAE for protein backbone tokenization"
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
 dependencies = [
     "torch>=2.3",
     "numpy",
@@ -19,17 +23,12 @@ dependencies = [
     "scipy",
     "gemmi",
     "biopython",
-    "pyyaml"
+    "pyyaml",
+    "tensorboard",
 ]
 
-[project.optional-dependencies]
-viz = ["tensorboard"]
-
 [project.scripts]
-gcpvq.encode = "vqvae.cli:encode_cmd"
-gcpvq.decode = "vqvae.cli:decode_cmd"
-gcpvq.train = "vqvae.cli:train_cmd"
-gcpvq.eval = "vqvae.cli:eval_cmd"
-
-[tool.setuptools.packages.find]
-where = ["src"]
+gcpvq-encode = "gcpvqvae.cli:encode_cmd"
+gcpvq-decode = "gcpvqvae.cli:decode_cmd"
+gcpvq-train  = "gcpvqvae.cli:train_cmd"
+gcpvq-eval   = "gcpvqvae.cli:eval_cmd"
