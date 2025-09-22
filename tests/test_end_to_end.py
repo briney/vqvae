@@ -70,7 +70,7 @@ def test_training_smoke_test(pilot_config, dummy_data_dir):
 
 def test_encode_decode_roundtrip(pilot_config, tmp_path):
     """
-    Tests that the encode and decode methods run without errors.
+    Tests that the encode and decode methods run without errors for mmCIF files.
     """
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = GCPVQVAE(pilot_config["model"]).to(device)
@@ -84,6 +84,39 @@ def test_encode_decode_roundtrip(pilot_config, tmp_path):
     assert encode_result is not None
     assert "tokens" in encode_result
     assert encode_result["tokens"].ndim == 1
+    assert encode_result["input_format"] == "cif"
+
+    # Decode
+    decode_result = model.decode(
+        encode_result["tokens"],
+        pose_header=encode_result["pose_header"]
+    )
+
+    assert decode_result is not None
+    assert "coords" in decode_result
+
+    # Check that the number of residues is consistent
+    assert decode_result["coords"].shape[0] == encode_result["length"]
+    assert decode_result["coords"].shape == (encode_result["length"], 3, 3)
+
+
+def test_pdb_encode_decode_roundtrip(pilot_config, tmp_path):
+    """
+    Tests that the encode and decode methods run without errors for PDB files.
+    """
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = GCPVQVAE(pilot_config["model"]).to(device)
+
+    pdb_path = "tests/data/dummy_A.pdb"
+    chain_id = "A"
+
+    # Encode
+    encode_result = model.encode(pdb_path, chain_id)
+
+    assert encode_result is not None
+    assert "tokens" in encode_result
+    assert encode_result["tokens"].ndim == 1
+    assert encode_result["input_format"] == "pdb"
 
     # Decode
     decode_result = model.decode(
