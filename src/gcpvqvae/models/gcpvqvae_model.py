@@ -11,7 +11,7 @@ import torch
 from torch import nn
 
 from gcpvqvae.data.featurize import featurize_backbone
-from gcpvqvae.data.mmcif import load_mmcif, write_mmcif, ParsedMmcif
+from gcpvqvae.data.protein_io import load_protein_file, ParsedProtein
 from gcpvqvae.models.decoder import Rigid6DHead
 from gcpvqvae.models.gcpnet import GCPNetEncoder
 from gcpvqvae.models.losses import ReconstructionLoss
@@ -85,37 +85,41 @@ class GCPVQVAE(nn.Module):
         }
 
     @torch.no_grad()
-    def encode(self, mmcif_path: str, chain_id: str, max_length: int = 2048) -> dict[str, Any] | None:
-        """Encode an mmCIF file to discrete tokens."""
+    def encode(self, protein_path: str, chain_id: str, max_length: int = 2048) -> dict[str, Any] | None:
+        """Encode a protein structure file to discrete tokens."""
         self.eval()
 
         # 1. Load and featurize data
-        parsed_mmcif = load_mmcif(mmcif_path, chain_id, max_length=max_length)
-        if parsed_mmcif is None:
+        parsed_protein = load_protein_file(protein_path, chain_id, max_length=max_length)
+        if parsed_protein is None:
             return None
 
-        features = featurize_backbone(parsed_mmcif)
+        features = featurize_backbone(parsed_protein)
 
         # The GNN encoder expects a batch dictionary, but for a single item,
         # we can pass the features directly.
         features_dict = features.__dict__
-        mask = parsed_mmcif.mask.unsqueeze(0) # Transformer needs batch dim
+        mask = parsed_protein.mask.unsqueeze(0) # Transformer needs batch dim
 
         # 2. Run encoder and VQ
         z_enc = self.gcp_encoder(features_dict)
         h_lat = self.enc_transformer(z_enc.unsqueeze(0), mask=mask)
         vq_out = self.vq(h_lat)
 
+        # 3. Determine input format
+        input_format = 'pdb' if protein_path.endswith('.pdb') else 'cif'
+
         return {
             "tokens": vq_out['indices'].squeeze(0).cpu().numpy(),
-            "length": parsed_mmcif.coords.shape[0],
-            "mask": parsed_mmcif.mask.cpu().numpy(),
+            "length": parsed_protein.coords.shape[0],
+            "mask": parsed_protein.mask.cpu().numpy(),
             "pose_header": (
-                parsed_mmcif.pose_header[0].cpu().numpy(),
-                parsed_mmcif.pose_header[1].cpu().numpy(),
+                parsed_protein.pose_header[0].cpu().numpy(),
+                parsed_protein.pose_header[1].cpu().numpy(),
             ),
-            "chain_id": parsed_mmcif.chain_id,
-            "aatype": parsed_mmcif.aatype,
+            "chain_id": parsed_protein.chain_id,
+            "aatype": parsed_protein.aatype,
+            "input_format": input_format,
         }
 
     @torch.no_grad()

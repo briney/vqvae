@@ -1,4 +1,4 @@
-"""Utilities for reading and writing mmCIF structures."""
+"""Utilities for reading and writing protein structure files (mmCIF, PDB)."""
 
 from __future__ import annotations
 
@@ -26,7 +26,8 @@ INDEX_TO_AA = {i: aa for aa, i in AA_TO_INDEX.items()}
 
 
 @dataclasses.dataclass(frozen=True)
-class ParsedMmcif:
+class ParsedProtein:
+    """A dataclass to hold parsed protein information."""
     coords: torch.Tensor
     mask: torch.Tensor
     sequence: torch.Tensor
@@ -35,7 +36,8 @@ class ParsedMmcif:
     aatype: str
 
 
-def load_mmcif(path: str, chain_id: str, max_length: int = 2048) -> Optional[ParsedMmcif]:
+def load_protein_file(path: str, chain_id: str, max_length: int = 2048) -> Optional[ParsedProtein]:
+    """Loads a protein from a PDB or mmCIF file."""
     try:
         structure = gemmi.read_structure(path)
     except (RuntimeError, ValueError) as e:
@@ -91,7 +93,7 @@ def load_mmcif(path: str, chain_id: str, max_length: int = 2048) -> Optional[Par
     rotation = np.eye(3, dtype=np.float32)
     translation = centroid
 
-    return ParsedMmcif(
+    return ParsedProtein(
         coords=torch.from_numpy(coords),
         mask=torch.from_numpy(mask),
         sequence=torch.from_numpy(sequence),
@@ -101,14 +103,13 @@ def load_mmcif(path: str, chain_id: str, max_length: int = 2048) -> Optional[Par
     )
 
 
-def write_mmcif(
+def _create_gemmi_structure(
     coords: np.ndarray,
     mask: np.ndarray,
     aatype: str,
     chain_id: str,
-    path: str,
-) -> None:
-    """Writes backbone coordinates to a minimal mmCIF file."""
+) -> gemmi.Structure:
+    """Helper to create a Gemmi Structure object from backbone coordinates."""
     struct = gemmi.Structure()
     model = gemmi.Model('1')
     chain = gemmi.Chain(chain_id)
@@ -120,7 +121,7 @@ def write_mmcif(
         res_name = RESTYPE_MAP_1_TO_3.get(aatype[i], "UNK")
         residue = gemmi.Residue()
         residue.name = res_name
-        residue.seqid = gemmi.SeqId(i + 1)
+        residue.seqid = gemmi.SeqId(str(i + 1))
 
         n_pos, ca_pos, c_pos = coords[i]
 
@@ -146,4 +147,21 @@ def write_mmcif(
 
     model.add_chain(chain)
     struct.add_model(model)
-    struct.write_cif(path)
+    return struct
+
+
+def write_protein_file(
+    coords: np.ndarray,
+    mask: np.ndarray,
+    aatype: str,
+    chain_id: str,
+    path: str,
+) -> None:
+    """Writes backbone coordinates to a minimal PDB or mmCIF file."""
+    structure = _create_gemmi_structure(coords, mask, aatype, chain_id)
+    if path.endswith('.pdb'):
+        structure.write_pdb(path)
+    elif path.endswith('.cif'):
+        structure.write_cif(path)
+    else:
+        raise ValueError(f"Unsupported file extension for {path}. Must be .pdb or .cif")

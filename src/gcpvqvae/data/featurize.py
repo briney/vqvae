@@ -7,7 +7,7 @@ import dataclasses
 import torch
 from torch.nn import functional as F
 
-from gcpvqvae.data.mmcif import ParsedMmcif
+from gcpvqvae.data.protein_io import ParsedProtein
 from gcpvqvae.geometry.frames import build_edge_frames
 from gcpvqvae.geometry.torsion import backbone_torsions
 
@@ -66,21 +66,21 @@ def _build_backbone_vectors(coords: torch.Tensor):
 
 
 def featurize_backbone(
-    parsed_mmcif: ParsedMmcif,
+    parsed_protein: ParsedProtein,
     k_neighbors: int = 16
 ) -> GraphFeatures:
     """
     Constructs all node and edge features for the GCPNet model.
 
     Args:
-        parsed_mmcif: The parsed mmCIF data.
+        parsed_protein: The parsed protein data.
         k_neighbors: The number of nearest neighbors for graph construction.
 
     Returns:
         A GraphFeatures object containing all necessary tensors.
     """
-    coords = parsed_mmcif.coords
-    mask = parsed_mmcif.mask
+    coords = parsed_protein.coords
+    mask = parsed_protein.mask
     L = coords.shape[0]
 
     # 1. Node scalar features (torsions)

@@ -10,7 +10,7 @@ import torch
 from torch.utils.data import Dataset
 
 from gcpvqvae.data.featurize import GraphFeatures, featurize_backbone
-from gcpvqvae.data.mmcif import ParsedMmcif, load_mmcif
+from gcpvqvae.data.protein_io import ParsedProtein, load_protein_file
 
 
 class BackboneDataset(Dataset):
@@ -55,33 +55,33 @@ class BackboneDataset(Dataset):
     def __len__(self) -> int:
         return len(self._samples)
 
-    def __getitem__(self, index: int) -> tuple[GraphFeatures, ParsedMmcif] | None:
+    def __getitem__(self, index: int) -> tuple[GraphFeatures, ParsedProtein] | None:
         if index in self._cache:
             return self._cache[index]
 
         path, chain_id = self._samples[index]
 
-        # Load and parse the mmCIF file
-        parsed_mmcif = load_mmcif(
+        # Load and parse the protein file
+        parsed_protein = load_protein_file(
             str(path),
             chain_id=chain_id,
             max_length=self.max_length,
         )
-        if parsed_mmcif is None:
+        if parsed_protein is None:
             return None # Skip invalid samples
 
         # Featurize the backbone into a graph representation
         graph_features = featurize_backbone(
-            parsed_mmcif,
+            parsed_protein,
             k_neighbors=self.k_neighbors,
         )
 
-        result = (graph_features, parsed_mmcif)
+        result = (graph_features, parsed_protein)
         self._cache[index] = result
         return result
 
 
-def collate_backbones(batch: list[tuple[GraphFeatures, ParsedMmcif] | None]):
+def collate_backbones(batch: list[tuple[GraphFeatures, ParsedProtein] | None]):
     """
     Collate function for a batch of backbone samples.
 
@@ -96,7 +96,7 @@ def collate_backbones(batch: list[tuple[GraphFeatures, ParsedMmcif] | None]):
     if not batch:
         return None
 
-    graph_features_list, parsed_mmcif_list = zip(*batch)
+    graph_features_list, parsed_protein_list = zip(*batch)
 
     # Collate graph features
     node_scalars = torch.cat([g.node_scalars for g in graph_features_list], dim=0)
@@ -120,10 +120,10 @@ def collate_backbones(batch: list[tuple[GraphFeatures, ParsedMmcif] | None]):
 
     # Pad the sequence-based tensors (coords, mask)
     coords = torch.nn.utils.rnn.pad_sequence(
-        [p.coords for p in parsed_mmcif_list], batch_first=True
+        [p.coords for p in parsed_protein_list], batch_first=True
     )
     mask = torch.nn.utils.rnn.pad_sequence(
-        [p.mask for p in parsed_mmcif_list], batch_first=True
+        [p.mask for p in parsed_protein_list], batch_first=True
     )
 
     return {
