@@ -31,6 +31,7 @@ The main dependencies are:
 - `einops`
 - `scipy`
 - `gemmi`
+- `click`
 - `biopython`
 - `pyyaml`
 - `tensorboard`
