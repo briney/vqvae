@@ -1,6 +1,57 @@
-# Pilot configuration for smoke tests (stub).
+# Lightweight configuration for quick smoke tests on a small mmCIF folder.
+
+data:
+  root: "data/pilot"
+  k: 12
+  num_workers: 4
+  cache: true
+
 model:
-  latent_dim: 128
-training:
-  batch_size: 4
-  epochs: 2
+  gcp:
+    hidden_scalar_dim: 64
+    hidden_vector_dim: 8
+    edge_scalar_dim: 16
+    edge_vector_dim: 1
+    latent_dim: 128
+    layers: 3
+  vq:
+    num_codes: 512
+    dim: 128
+    beta: 0.25
+    decay: 0.99
+    kmeans_iters: 5
+    orthogonal_reg_weight: 1.0
+  encoder:
+    model_dim: 384
+    num_layers: 4
+    num_heads: 6
+    num_kv_heads: 2
+    dropout: 0.0
+  decoder:
+    model_dim: 384
+    num_layers: 6
+    num_heads: 6
+    num_kv_heads: 1
+    dropout: 0.0
+
+train:
+  seed: 1234
+  amp: false
+  clip_grad: 1.0
+  random_rotation: true
+  log_interval: 5
+  checkpoint_interval: 5
+  output_dir: "runs/pilot"
+  export:
+    enabled: false
+  stages:
+    - name: pilot
+      length_cap: 512
+      batch_size: 4
+      base_lr: 0.0003
+      min_lr: 0.00001
+      warmup_steps: 500
+      epochs: 3
+      accumulation_steps: 1
+      nan_mask_prob: 0.0
+      nan_mask_span: [1, 1]

@@ -1,6 +1,75 @@
-# Base configuration for full-scale training (stub).
+# Full-scale training configuration reflecting the two-stage schedule described
+# in the manuscript.  The defaults match Table 4/5 and can serve as a template
+# for distributed runs once adequate data is available.
+
+data:
+  root: "data/train"          # path to a directory with mmCIF files
+  k: 16                        # kNN edges per residue
+  num_workers: 8
+  cache: true
+
 model:
-  latent_dim: 256
-training:
-  batch_size: 32
-  epochs: 100
+  gcp:
+    hidden_scalar_dim: 128
+    hidden_vector_dim: 16
+    edge_scalar_dim: 32
+    edge_vector_dim: 1
+    latent_dim: 256
+    layers: 6
+  vq:
+    num_codes: 4096
+    dim: 256
+    beta: 0.5
+    decay: 0.99
+    kmeans_iters: 10
+    orthogonal_reg_weight: 10.0
+    orthogonal_reg_max_codes: 512
+  encoder:
+    model_dim: 1024
+    num_layers: 12
+    num_heads: 12
+    num_kv_heads: 3
+    dropout: 0.0
+    ffn_multiplier: 4.0
+  decoder:
+    model_dim: 1024
+    num_layers: 16
+    num_heads: 16
+    num_kv_heads: 1
+    dropout: 0.0
+    ffn_multiplier: 4.0
+
+train:
+  seed: 42
+  amp: true
+  clip_grad: 1.0
+  random_rotation: true
+  log_interval: 100
+  checkpoint_interval: 5000
+  output_dir: "runs/full"
+  export:
+    enabled: true
+    directory: "runs/full/exports"
+    on_stage_end: true
+    num_samples: 2
+  stages:
+    - name: stage1
+      length_cap: 512
+      batch_size: 16
+      base_lr: 0.0001
+      min_lr: 0.000001
+      warmup_steps: 16000
+      total_steps: 375000
+      accumulation_steps: 1
+      nan_mask_prob: 0.0
+      nan_mask_span: [1, 1]
+    - name: stage2
+      length_cap: 1280
+      batch_size: 4
+      base_lr: 0.00005
+      min_lr: 0.000001
+      warmup_steps: 16000
+      total_steps: 1500000
+      accumulation_steps: 1
+      nan_mask_prob: 0.05
+      nan_mask_span: [1, 30]
