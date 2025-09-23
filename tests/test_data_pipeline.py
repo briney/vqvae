@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import gemmi
+import pytest
 import torch
 
 from gcpvqvae.data.dataset import BackboneDataset, collate_backbones
@@ -71,14 +72,18 @@ def _build_test_structure(path: Path) -> dict[str, torch.Tensor]:
 
     structure.add_model(model)
     structure.setup_entities()
-    doc = structure.make_mmcif_document()
-    doc.write_file(str(path))
+    if path.suffix.lower() in {".pdb", ".ent"}:
+        structure.write_minimal_pdb(str(path))
+    else:
+        doc = structure.make_mmcif_document()
+        doc.write_file(str(path))
 
     return info
 
 
-def test_load_mmcif_parses_backbone(tmp_path):
-    path = tmp_path / "test.cif"
+@pytest.mark.parametrize("suffix", [".cif", ".pdb"])
+def test_load_mmcif_parses_backbone(tmp_path, suffix):
+    path = tmp_path / f"test{suffix}"
     info = _build_test_structure(path)
 
     records = load_mmcif(str(path))
@@ -100,8 +105,9 @@ def test_load_mmcif_parses_backbone(tmp_path):
     assert record_b.atom_mask[1].tolist() == [True, True, False]
 
 
-def test_featurize_backbone_produces_expected_shapes(tmp_path):
-    path = tmp_path / "test.cif"
+@pytest.mark.parametrize("suffix", [".cif", ".pdb"])
+def test_featurize_backbone_produces_expected_shapes(tmp_path, suffix):
+    path = tmp_path / f"test{suffix}"
     _build_test_structure(path)
 
     record = load_mmcif(str(path), chain_id="A")[0]
@@ -127,18 +133,25 @@ def test_featurize_backbone_produces_expected_shapes(tmp_path):
 
 
 def test_dataset_and_collate(tmp_path):
-    path = tmp_path / "test.cif"
-    _build_test_structure(path)
+    cif_path = tmp_path / "test.cif"
+    pdb_path = tmp_path / "test.pdb"
+    _build_test_structure(cif_path)
+    _build_test_structure(pdb_path)
 
-    dataset = BackboneDataset(path, k=2)
-    assert len(dataset) == 2
+    dataset = BackboneDataset(tmp_path, k=2)
+    assert len(dataset) == 4
+
+    paths = [Path(p) for p, _ in dataset._keys]  # type: ignore[attr-defined]
+    assert any(path.suffix.lower() == ".cif" for path in paths)
+    assert any(path.suffix.lower() == ".pdb" for path in paths)
 
     sample = dataset[0]
+    other = dataset[1]
     assert sample["coords"].ndim == 3
     assert sample["node_scalars"].shape[-1] == 6
     assert "metadata" in sample
 
-    batch = collate_backbones([dataset[0], dataset[1]])
+    batch = collate_backbones([sample, other])
     assert batch["coords"].shape[0] == 2
     assert batch["coords"].shape[1] >= sample["coords"].shape[0]
     assert torch.all(batch["seq"][0, batch["lengths"][0] : ] == PAD_INDEX)

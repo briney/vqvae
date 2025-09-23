@@ -18,7 +18,16 @@ def _discover_files(root: Path) -> List[Path]:
     if root.is_file():
         return [root]
 
-    patterns = ["*.cif", "*.cif.gz", "*.mmcif", "*.mmcif.gz"]
+    patterns = [
+        "*.cif",
+        "*.cif.gz",
+        "*.mmcif",
+        "*.mmcif.gz",
+        "*.pdb",
+        "*.pdb.gz",
+        "*.ent",
+        "*.ent.gz",
+    ]
     files: List[Path] = []
     for pattern in patterns:
         files.extend(sorted(root.rglob(pattern)))
