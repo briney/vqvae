@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Sequence
 
 import torch
 
@@ -79,11 +79,54 @@ def tm_score(
         return torch.tensor(0.0, dtype=coords_a.dtype, device=coords_a.device)
 
     if length_scale is None:
-        length_scale = 1.24 * (L - 15) ** (1 / 3) - 1.8
-        length_scale = float(torch.clamp(torch.tensor(length_scale, dtype=coords_a.dtype), min=0.5))
+        effective_L = max(L, 19)
+        length_scale = 1.24 * (effective_L - 15) ** (1 / 3) - 1.8
+    length_scale = max(float(length_scale), 0.5)
+    length_scale_tensor = torch.tensor(length_scale, dtype=coords_a.dtype, device=coords_a.device)
 
-    score = (1.0 / L) * torch.sum(1.0 / (1.0 + (diff / length_scale) ** 2))
+    score = (1.0 / L) * torch.sum(1.0 / (1.0 + (diff / length_scale_tensor) ** 2))
     return score
 
 
-__all__ = ["rmsd", "tm_score"]
+def gdt_ts(
+    coords_a: Tensor,
+    coords_b: Tensor,
+    *,
+    mask: Optional[Tensor] = None,
+    thresholds: Sequence[float] = (1.0, 2.0, 4.0, 8.0),
+) -> Tensor:
+    """Compute the Global Distance Test Total Score (GDT-TS).
+
+    The metric measures the fraction of residues whose Cα atoms fall within the
+    specified distance thresholds after the structures have been aligned.
+    """
+
+    if coords_a.shape != coords_b.shape:
+        raise ValueError("coords_a and coords_b must have identical shapes")
+    if coords_a.size(-2) != 3:
+        raise ValueError("Inputs must contain backbone atoms with shape (..., 3, 3)")
+    if not thresholds:
+        raise ValueError("At least one distance threshold is required")
+
+    ca_a = coords_a[..., 1, :]
+    ca_b = coords_b[..., 1, :]
+    diff = torch.linalg.norm(ca_a - ca_b, dim=-1)
+
+    if mask is not None:
+        mask = mask.to(torch.bool)
+        diff = diff[mask]
+
+    L = diff.numel()
+    if L == 0:
+        return torch.tensor(0.0, dtype=coords_a.dtype, device=coords_a.device)
+
+    scores = []
+    for threshold in thresholds:
+        threshold = float(threshold)
+        within = (diff <= threshold).sum().to(coords_a.dtype)
+        scores.append(within / float(L))
+
+    return torch.mean(torch.stack(scores))
+
+
+__all__ = ["rmsd", "tm_score", "gdt_ts"]
