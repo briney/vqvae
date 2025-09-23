@@ -404,11 +404,20 @@ def _export_samples(
             if record is None:
                 continue
 
-            cif_path = target_dir / f"{Path(path).stem}_{chain_id}_recon.cif"
+            suffixes = [s.lower() for s in Path(path).suffixes]
+            if suffixes and suffixes[-1] == ".gz":
+                suffixes = suffixes[:-1]
+            if suffixes and suffixes[-1] in {".pdb", ".ent"}:
+                output_ext = ".pdb"
+            else:
+                output_ext = ".cif"
+            cif_path = target_dir / f"{Path(path).stem}_{chain_id}_recon{output_ext}"
             try:
                 write_mmcif(record, str(cif_path))
             except Exception as exc:  # pragma: no cover - gemmi may be unavailable
-                logger.warning("Failed to write mmCIF for %s chain %s: %s", path, chain_id, exc)
+                logger.warning(
+                    "Failed to write structure for %s chain %s: %s", path, chain_id, exc
+                )
     finally:
         model.train(was_training)
 

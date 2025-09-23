@@ -3,10 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 
 import gemmi
+import pytest
 import torch
 
 from gcpvqvae.data.dataset import BackboneDataset, collate_backbones
-from gcpvqvae.data.mmcif import BackboneRecord
+from gcpvqvae.data.mmcif import BackboneRecord, write_mmcif
 from gcpvqvae.models.gcpnet import GCPNetConfig
 from gcpvqvae.models.gcpvqvae import (
     DataPipelineConfig,
@@ -65,8 +66,11 @@ def _build_test_structure(path: Path) -> None:
     structure.add_model(model)
     structure.setup_entities()
 
-    doc = structure.make_mmcif_document()
-    doc.write_file(str(path))
+    if path.suffix.lower() in {".pdb", ".ent"}:
+        structure.write_minimal_pdb(str(path))
+    else:
+        doc = structure.make_mmcif_document()
+        doc.write_file(str(path))
 
 
 def _make_config() -> GCPVQVAEConfig:
@@ -106,11 +110,12 @@ def _make_config() -> GCPVQVAEConfig:
     )
 
 
-def test_model_forward_runs(tmp_path) -> None:
-    cif_path = Path(tmp_path) / "toy.cif"
-    _build_test_structure(cif_path)
+@pytest.mark.parametrize("suffix", [".cif", ".pdb"])
+def test_model_forward_runs(tmp_path, suffix) -> None:
+    structure_path = Path(tmp_path) / f"toy{suffix}"
+    _build_test_structure(structure_path)
 
-    dataset = BackboneDataset(cif_path, k=2)
+    dataset = BackboneDataset(structure_path, k=2)
     batch = collate_backbones([dataset[0]])
 
     model = GCPVQVAE(_make_config())
@@ -125,13 +130,14 @@ def test_model_forward_runs(tmp_path) -> None:
     assert all(torch.isfinite(g).all() for g in grads)
 
 
-def test_encode_decode_roundtrip(tmp_path) -> None:
-    cif_path = Path(tmp_path) / "toy.cif"
-    _build_test_structure(cif_path)
+@pytest.mark.parametrize("suffix", [".cif", ".pdb"])
+def test_encode_decode_roundtrip(tmp_path, suffix) -> None:
+    structure_path = Path(tmp_path) / f"toy{suffix}"
+    _build_test_structure(structure_path)
 
     model = GCPVQVAE(_make_config())
 
-    encoded = model.encode(str(cif_path), chain_id="A", k=2)
+    encoded = model.encode(str(structure_path), chain_id="A", k=2)
     tokens = encoded["tokens"]
     mask = encoded["mask"]
 
@@ -152,3 +158,7 @@ def test_encode_decode_roundtrip(tmp_path) -> None:
     record = decoded["records"]
     assert isinstance(record, BackboneRecord)
     assert record.coords.shape[0] == int(mask.sum().item())
+
+    output_path = Path(tmp_path) / f"roundtrip{suffix}"
+    write_mmcif(record, str(output_path))
+    assert output_path.exists()
