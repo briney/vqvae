@@ -85,6 +85,9 @@ class VectorQuantizer(nn.Module):
             self.initialized.data.fill_(True)
 
     def forward(self, z):
+        if z.ndim == 2:
+            z = z.unsqueeze(0)
+
         B, L, D = z.shape
         z_flat = z.reshape(-1, self.d_vq)
 

@@ -65,7 +65,8 @@ class Attention(nn.Module):
         self.to_out = Linear(d_model, d_model)
 
     def forward(self, x, mask=None):
-        b, n, _, h_q, h_kv = *x.shape, self.heads_q, self.heads_kv
+        b, n, _ = x.shape
+        h_q, h_kv = self.heads_q, self.heads_kv
 
         q = self.to_q(x)
         k = self.to_k(x)
@@ -134,15 +135,22 @@ class Transformer(nn.Module):
         self.proj_out = Linear(d_model, d_vq) if project_out else nn.Identity()
 
     def forward(self, x, mask=None):
+        if x.ndim == 2:
+            x = x.unsqueeze(0)
+
         x = self.proj_in(x)
 
         # Create attention mask if provided
         attn_mask = None
         if mask is not None:
+            if mask.ndim == 1:
+                mask = mask.unsqueeze(0)
             attn_mask = rearrange(mask, 'b i -> b 1 i 1') & rearrange(mask, 'b j -> b 1 1 j')
 
         for layer in self.layers:
             x = layer(x, mask=attn_mask)
 
         x = self.norm_out(x)
-        return self.proj_out(x)
+        out = self.proj_out(x)
+
+        return out

@@ -64,6 +64,9 @@ class Rigid6DHead(nn.Module):
         Returns:
             A tensor of predicted coordinates of shape [B, L, 3, 3].
         """
+        if H.ndim == 2:
+            H = H.unsqueeze(0)
+
         B, L, _ = H.shape
 
         # Initialize the running pose for each item in the batch
@@ -84,21 +87,27 @@ class Rigid6DHead(nn.Module):
             # Split into two 3D vectors and a translation
             a = params_i[:, 0:3]
             b = params_i[:, 3:6]
-            t_tilde = params_i[:, 6:9]
+            t_update = params_i[:, 6:9]
 
-            # Get the rotation and translation for this step
+            # Get the rotation for this step
             R_update = _gram_schmidt(a, b)
-            t_update = self.alpha * t_tilde
 
-            # Compose with the running pose: g_new = g_running @ g_update
-            # R_new = R_running @ R_update
-            # t_new = R_running @ t_update + t_running
-            R_running = torch.bmm(R_running, R_update)
-            t_running = torch.bmm(t_update.unsqueeze(1), R_running.transpose(1, 2)).squeeze(1) + t_running
+            # Scale translation
+            t_update = self.alpha * t_update
+
+            # Store old pose for use in translation update
+            R_old = R_running
+
+            # Compose with the running pose: g_new = g_old @ g_update
+            # R_new = R_old @ R_update
+            # t_new = t_old + R_old @ t_update
+            R_running = torch.bmm(R_old, R_update)
+            t_running = torch.bmm(R_old, t_update.unsqueeze(-1)).squeeze(-1) + t_running
 
             # Apply the new pose to the local template to get world coordinates
-            # coords_i = (R_running @ self.local_template.T).T + t_running
             coords_i = torch.einsum('bij,kj->bik', R_running, self.local_template) + t_running.unsqueeze(1)
             all_coords.append(coords_i)
 
-        return torch.stack(all_coords, dim=1)
+        out = torch.stack(all_coords, dim=1)
+
+        return out

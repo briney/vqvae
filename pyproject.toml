@@ -27,6 +27,7 @@ dependencies = [
     "tensorboard",
     "click",
     "tqdm",
+    "matplotlib",
 ]
 
 [project.scripts]
