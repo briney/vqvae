@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 
+import pytest
 import torch
 
 from gcpvqvae.geometry.frames import build_local_frames, kabsch_align
@@ -53,7 +54,25 @@ def test_build_local_frames_right_handed() -> None:
     assert torch.all(det > 0.99)
 
 
+def _set_seed() -> None:
+    torch.manual_seed(0)
+
+
+def test_kabsch_align_identity() -> None:
+    _set_seed()
+    device = torch.device("cpu")
+    dtype = torch.float64
+    points = torch.randn(10, 3, device=device, dtype=dtype)
+
+    R, t, aligned = kabsch_align(points, points, return_aligned=True)
+
+    assert torch.allclose(R, torch.eye(3, dtype=dtype), atol=1e-7)
+    assert torch.allclose(t, torch.zeros(3, dtype=dtype), atol=1e-7)
+    assert aligned is not None and torch.allclose(aligned, points, atol=1e-7)
+
+
 def test_kabsch_align_recovers_transform() -> None:
+    _set_seed()
     device = torch.device("cpu")
     dtype = torch.float64
     points = torch.randn(10, 3, device=device, dtype=dtype)
@@ -67,3 +86,85 @@ def test_kabsch_align_recovers_transform() -> None:
     assert torch.allclose(R, rotation, atol=1e-6)
     assert torch.allclose(t, translation, atol=1e-6)
     assert aligned is not None and torch.allclose(aligned, transformed, atol=1e-6)
+
+
+def test_kabsch_align_pure_translation() -> None:
+    _set_seed()
+    device = torch.device("cpu")
+    dtype = torch.float64
+    points = torch.randn(7, 3, device=device, dtype=dtype)
+    translation = torch.tensor([-0.2, 0.5, 1.3], device=device, dtype=dtype)
+
+    transformed = points + translation
+    R, t, aligned = kabsch_align(points, transformed, return_aligned=True)
+
+    assert torch.allclose(R, torch.eye(3, dtype=dtype), atol=1e-7)
+    assert torch.allclose(t, translation, atol=1e-7)
+    assert aligned is not None and torch.allclose(aligned, transformed, atol=1e-7)
+
+
+def test_kabsch_align_supports_masks() -> None:
+    _set_seed()
+    device = torch.device("cpu")
+    dtype = torch.float64
+    points = torch.randn(12, 3, device=device, dtype=dtype)
+    rotation = _random_rotation(device, dtype)
+    translation = torch.tensor([0.2, -0.8, 1.1], device=device, dtype=dtype)
+
+    transformed = (points @ rotation) + translation
+
+    mask = torch.tensor([True, True, True, False, True, False, True, True, False, True, False, True])
+
+    R, t, aligned = kabsch_align(points, transformed, mask=mask, return_aligned=True)
+
+    assert torch.allclose(R, rotation, atol=1e-6)
+    assert torch.allclose(t, translation, atol=1e-6)
+    assert aligned is not None and torch.allclose(aligned, transformed, atol=1e-6)
+
+
+def test_kabsch_align_requires_three_points() -> None:
+    _set_seed()
+    points = torch.randn(5, 3, dtype=torch.float32)
+    transformed = points.clone()
+    mask = torch.tensor([True, True, False, False, False])
+
+    with pytest.raises(ValueError):
+        kabsch_align(points, transformed, mask=mask)
+
+
+def test_kabsch_alignment_with_reflection_toggle() -> None:
+    _set_seed()
+    device = torch.device("cpu")
+    dtype = torch.float64
+    points = torch.randn(9, 3, device=device, dtype=dtype)
+
+    reflection = torch.diag(torch.tensor([1.0, -1.0, 1.0], device=device, dtype=dtype))
+    reflected = points @ reflection
+
+    R_forced, _, aligned_forced = kabsch_align(points, reflected, return_aligned=True)
+    R_free, _, aligned_free = kabsch_align(points, reflected, allow_reflections=True, return_aligned=True)
+
+    assert aligned_free is not None and torch.allclose(aligned_free, reflected, atol=1e-6)
+    assert torch.allclose(R_free, reflection, atol=1e-6)
+
+    assert torch.linalg.det(R_forced) > 0.0
+    assert aligned_forced is not None
+    forced_rmsd = torch.sqrt(torch.mean((aligned_forced - reflected) ** 2))
+    free_rmsd = torch.sqrt(torch.mean((aligned_free - reflected) ** 2))
+    assert forced_rmsd > free_rmsd * 10
+
+
+def test_kabsch_align_float32_accuracy() -> None:
+    _set_seed()
+    device = torch.device("cpu")
+    dtype = torch.float32
+    points = torch.randn(15, 3, device=device, dtype=dtype)
+    rotation = _random_rotation(device, torch.float64).to(dtype)
+    translation = torch.tensor([-0.3, 0.6, -1.4], device=device, dtype=dtype)
+
+    transformed = (points @ rotation) + translation
+    R, t, aligned = kabsch_align(points, transformed, return_aligned=True)
+
+    assert torch.allclose(R, rotation, atol=1e-5)
+    assert torch.allclose(t, translation, atol=1e-5)
+    assert aligned is not None and torch.allclose(aligned, transformed, atol=1e-5)
