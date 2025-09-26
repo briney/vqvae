@@ -114,6 +114,15 @@ class Trainer:
         self.logger.close()
         print("Training finished.")
 
+        # Save final checkpoint
+        save_checkpoint(
+            self.model,
+            self.optimizer,
+            self.step,
+            self.config,
+            self.config['train']['save_path']
+        )
+
 
 def train_from_config(config_path: str):
     """Load config and run training."""
