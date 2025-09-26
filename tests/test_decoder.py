@@ -67,3 +67,22 @@ def test_rotation_decoder_respects_mask() -> None:
     assert torch.allclose(ca_positions[0], torch.tensor([1.0, 0.0, 0.0]))
     assert torch.allclose(ca_positions[1], torch.zeros(3))
     assert torch.allclose(t, torch.tensor([1.0, 0.0, 0.0]))
+
+
+def test_rotation_decoder_produces_valid_rotations() -> None:
+    torch.manual_seed(0)
+    decoder = RotationDecoder(9)
+
+    latents = torch.randn(2, 5, 9)
+    _, (R, _t) = decoder(latents)
+
+    identity = torch.eye(3).expand(R.shape[0], 3, 3)
+    rt_r = torch.matmul(R.transpose(-1, -2), R)
+    assert torch.allclose(rt_r, identity, atol=1e-5)
+    det = torch.linalg.det(R)
+    assert torch.allclose(det, torch.ones_like(det), atol=1e-5)
+
+    basis = torch.eye(3)
+    rotated = torch.matmul(R, basis)
+    norms = torch.linalg.norm(rotated, dim=-2)
+    assert torch.allclose(norms, torch.ones_like(norms), atol=1e-5)

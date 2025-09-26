@@ -54,6 +54,31 @@ def test_build_local_frames_right_handed() -> None:
     assert torch.all(det > 0.99)
 
 
+def test_build_local_frames_equivariant_under_rigid_transform() -> None:
+    torch.manual_seed(0)
+    coords = torch.randn(6, 3)
+    edge_index = torch.tensor([[0, 1, 2, 3], [1, 2, 3, 4]])
+
+    original = build_local_frames(coords, edge_index)
+
+    rotation = _random_rotation(device=torch.device("cpu"), dtype=torch.float64).to(torch.float32)
+    translation = torch.tensor([0.4, -0.7, 1.1])
+
+    transformed = coords @ rotation + translation
+    transformed_frames = build_local_frames(transformed, edge_index)
+
+    relation = torch.matmul(transformed_frames, original.transpose(-1, -2))
+    ortho = torch.matmul(relation.transpose(-1, -2), relation)
+    identity = torch.eye(3).expand_as(ortho)
+    assert torch.allclose(ortho, identity, atol=1e-5)
+    assert torch.all(torch.linalg.det(relation) > 0.99)
+
+    orthogonality = torch.matmul(transformed_frames.transpose(-1, -2), transformed_frames)
+    identity = torch.eye(3).expand_as(orthogonality)
+    assert torch.allclose(orthogonality, identity, atol=1e-5)
+    assert torch.all(torch.linalg.det(transformed_frames) > 0.99)
+
+
 def _set_seed() -> None:
     torch.manual_seed(0)
 
