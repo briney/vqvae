@@ -1,7 +1,9 @@
+from pathlib import Path
+
 import gemmi
 import yaml
 
-from gcpvqvae.system.train import train
+from gcpvqvae.system.train import Trainer, train
 
 
 def _build_toy_structure(path):
@@ -117,3 +119,89 @@ def test_training_harness_runs_single_stage(tmp_path):
 
     checkpoints = list((output_dir / "checkpoints").glob("*.pt"))
     assert checkpoints, "training did not produce checkpoints"
+
+
+def test_training_on_cif_dataset_decreases_loss(tmp_path, monkeypatch):
+    data_root = Path(__file__).resolve().parent / "test_data" / "cif_50"
+
+    output_dir = tmp_path / "runs"
+    config = {
+        "data": {
+            "root": str(data_root),
+            "k": 4,
+            "num_workers": 0,
+            "cache": True,
+        },
+        "model": {
+            "gcp": {
+                "hidden_scalar_dim": 16,
+                "hidden_vector_dim": 4,
+                "edge_scalar_dim": 8,
+                "edge_vector_dim": 1,
+                "latent_dim": 16,
+                "layers": 2,
+            },
+            "vq": {
+                "num_codes": 16,
+                "dim": 16,
+                "beta": 0.25,
+                "decay": 0.99,
+                "kmeans_iters": 1,
+            },
+            "encoder": {
+                "model_dim": 64,
+                "num_layers": 2,
+                "num_heads": 2,
+                "num_kv_heads": 1,
+            },
+            "decoder": {
+                "model_dim": 64,
+                "num_layers": 2,
+                "num_heads": 2,
+                "num_kv_heads": 1,
+            },
+        },
+        "train": {
+            "seed": 7,
+            "amp": False,
+            "clip_grad": 1.0,
+            "random_rotation": False,
+            "log_interval": 1,
+            "checkpoint_interval": None,
+            "output_dir": str(output_dir),
+            "export": {"enabled": False},
+            "stages": [
+                {
+                    "name": "test",
+                    "length_cap": 128,
+                    "batch_size": 2,
+                    "base_lr": 0.001,
+                    "min_lr": 1e-4,
+                    "warmup_steps": 1,
+                    "total_steps": 4,
+                    "accumulation_steps": 1,
+                    "nan_mask_prob": 0.0,
+                }
+            ],
+        },
+    }
+
+    config_path = tmp_path / "config.yaml"
+    with open(config_path, "w", encoding="utf-8") as handle:
+        yaml.safe_dump(config, handle)
+
+    losses = []
+    original = Trainer._log_stage_progress
+
+    def capture_progress(self, stage, stage_step, total_steps, trackers, samples, residues, elapsed):
+        losses.append(trackers["loss"].average)
+        return original(self, stage, stage_step, total_steps, trackers, samples, residues, elapsed)
+
+    monkeypatch.setattr(Trainer, "_log_stage_progress", capture_progress)
+
+    train(str(config_path))
+
+    checkpoints = list((output_dir / "checkpoints").glob("*.pt"))
+    assert checkpoints, "training did not produce checkpoints"
+    assert len(losses) >= 2, "training did not log multiple loss values"
+    assert losses[-1] < losses[0], "training loss did not decrease"
