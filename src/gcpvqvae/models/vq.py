@@ -127,6 +127,8 @@ class VectorQuantizer(nn.Module):
         self.register_buffer("ema_codebook", torch.zeros(num_codes, dim))
         self.register_buffer("usage", torch.zeros(num_codes))
 
+        self._pending_codebook: Optional[Tensor] = None
+
         self._initialised = False
 
     @staticmethod
@@ -168,6 +170,9 @@ class VectorQuantizer(nn.Module):
         *,
         mask: Optional[Tensor] = None,
     ) -> Tuple[Tensor, Tensor, Dict[str, Tensor]]:
+        if self._pending_codebook is not None:
+            self.commit_pending_codebook()
+
         if latents.size(-1) != self.dim:
             raise ValueError(f"Expected latent dim {self.dim}, got {latents.size(-1)}")
 
@@ -239,8 +244,7 @@ class VectorQuantizer(nn.Module):
                 cluster_size = self.ema_cluster_size + self.eps
                 n = cluster_size.sum()
                 cluster_size = cluster_size / (n + self.num_codes * self.eps) * n
-                updated = self.ema_codebook / cluster_size.unsqueeze(1)
-                self.embedding.copy_(updated)
+                self._pending_codebook = self.ema_codebook / cluster_size.unsqueeze(1)
 
         one_hot = F.one_hot(assignment, num_classes=self.num_codes).to(latents.dtype)
         avg_probs = one_hot.mean(dim=0)
@@ -267,6 +271,15 @@ class VectorQuantizer(nn.Module):
         }
 
         return quantized, indices, losses
+
+    def commit_pending_codebook(self) -> None:
+        """Apply any queued EMA codebook update."""
+
+        if self._pending_codebook is None:
+            return
+        with torch.no_grad():
+            self.embedding.copy_(self._pending_codebook)
+        self._pending_codebook = None
 
 
 __all__ = ["VectorQuantizer"]

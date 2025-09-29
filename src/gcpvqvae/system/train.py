@@ -553,6 +553,8 @@ class Trainer:
                         loss = outputs["total_loss"] / max(stage.accumulation_steps, 1)
 
                     loss.backward()
+                    if hasattr(self.model, "commit_updates"):
+                        self.model.commit_updates()
                     accum_counter += 1
 
                     batch_mask = batch["mask"]
