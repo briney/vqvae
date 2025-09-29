@@ -30,67 +30,71 @@ def aligned_mse(
     *,
     mask: Optional[Tensor] = None,
 ) -> Tensor:
-    """Compute the aligned MSE between predicted and target backbones."""
+    """Compute :math:`(P - T_\text{aln})^2` averaged over valid atoms."""
 
     pred_flat = _flatten_backbone(pred)
     target_flat = _flatten_backbone(target)
 
     mask_flat = _broadcast_mask(mask, pred.size(1))
+    if mask_flat is not None:
+        mask_flat = mask_flat.to(device=pred.device, dtype=torch.bool)
 
     losses = []
     for i in range(pred_flat.size(0)):
-        mask_i: Optional[Tensor]
         if mask_flat is not None:
             mask_i = mask_flat[i]
-            valid = mask_i.to(torch.bool)
-            if valid.sum() < 3:
+            if mask_i.sum() < 3:
                 losses.append(torch.zeros((), device=pred.device, dtype=pred.dtype))
                 continue
         else:
             mask_i = None
 
         try:
-            rotation, translation, _ = kabsch_align(
-                pred_flat[i],
+            _, _, target_aligned = kabsch_align(
                 target_flat[i],
+                pred_flat[i],
                 mask=mask_i,
                 allow_reflections=False,
-                return_aligned=False,
+                return_aligned=True,
             )
         except ValueError:
-            rotation = torch.eye(3, device=pred.device, dtype=pred.dtype)
-            translation = torch.zeros(3, device=pred.device, dtype=pred.dtype)
+            target_aligned = target_flat[i]
 
-        aligned = pred_flat[i] @ rotation + translation
-        diff = aligned - target_flat[i]
+        diff = pred_flat[i] - target_aligned
         if mask_i is not None:
-            diff = diff * mask_i.unsqueeze(-1)
-            denom = torch.clamp(mask_i.sum(), min=1.0) * 1.0
-        else:
-            denom = diff.shape[0]
-        losses.append((diff.square().sum(dim=-1).sum()) / denom)
+            diff = diff[mask_i]
+
+        if diff.numel() == 0:
+            losses.append(torch.zeros((), device=pred.device, dtype=pred.dtype))
+            continue
+
+        losses.append(diff.pow(2).mean())
 
     return torch.stack(losses).mean()
 
 
-def distance_matrix_loss(
+def backbone_distance_loss(
     pred: Tensor,
     target: Tensor,
     *,
     mask: Optional[Tensor] = None,
-    clamp_distance: float = 5.0,
+    clamp_distance: float = 25.0,
 ) -> Tensor:
-    """Pairwise distance loss on flattened residue representations."""
+    """Pairwise distance loss on flattened backbone atom coordinates."""
 
-    pred_flat = pred.view(pred.size(0), pred.size(1), -1)
-    target_flat = target.view(target.size(0), target.size(1), -1)
+    pred_flat = _flatten_backbone(pred)
+    target_flat = _flatten_backbone(target)
+
+    mask_flat = _broadcast_mask(mask, pred.size(1))
+    if mask_flat is not None:
+        mask_flat = mask_flat.to(device=pred.device, dtype=torch.bool)
 
     losses = []
     for i in range(pred_flat.size(0)):
-        if mask is not None:
-            valid = mask[i].to(torch.bool)
-            pred_i = pred_flat[i, valid]
-            target_i = target_flat[i, valid]
+        if mask_flat is not None:
+            mask_i = mask_flat[i]
+            pred_i = pred_flat[i, mask_i]
+            target_i = target_flat[i, mask_i]
         else:
             pred_i = pred_flat[i]
             target_i = target_flat[i]
@@ -134,21 +138,25 @@ def _backbone_vectors(coords: Tensor) -> Tensor:
     return torch.stack((v1, v2, v3, v4, v5, v6), dim=2)
 
 
-def direction_loss(
+def backbone_direction_loss(
     pred: Tensor,
     target: Tensor,
     *,
     mask: Optional[Tensor] = None,
+    clamp_value: float = 20.0,
 ) -> Tensor:
-    """Loss on backbone direction signatures."""
+    """Loss on backbone direction signatures using pairwise dot products."""
 
     pred_vectors = _backbone_vectors(pred)
     target_vectors = _backbone_vectors(target)
 
     losses = []
+    if mask is not None:
+        mask = mask.to(device=pred.device, dtype=torch.bool)
+
     for i in range(pred_vectors.size(0)):
         if mask is not None:
-            valid = mask[i].to(torch.bool)
+            valid = mask[i]
             pv = pred_vectors[i, valid]
             tv = target_vectors[i, valid]
         else:
@@ -161,6 +169,10 @@ def direction_loss(
 
         pred_dot = torch.einsum("icd,jcd->ijc", pv, pv)
         target_dot = torch.einsum("icd,jcd->ijc", tv, tv)
+
+        pred_dot = torch.clamp(pred_dot, min=-clamp_value, max=clamp_value)
+        target_dot = torch.clamp(target_dot, min=-clamp_value, max=clamp_value)
+
         losses.append((pred_dot - target_dot).pow(2).mean())
 
     return torch.stack(losses).mean()
@@ -177,8 +189,8 @@ def reconstruction_loss(
     """Compute the weighted reconstruction loss following Algorithm 2."""
 
     l_mse = aligned_mse(pred, target, mask=mask)
-    l_dist = distance_matrix_loss(pred, target, mask=mask)
-    l_dir = direction_loss(pred, target, mask=mask)
+    l_dist = backbone_distance_loss(pred, target, mask=mask)
+    l_dir = backbone_direction_loss(pred, target, mask=mask)
 
     total = weights[0] * l_mse + weights[1] * l_dist + weights[2] * l_dir
 
@@ -196,7 +208,7 @@ def reconstruction_loss(
 
 __all__ = [
     "aligned_mse",
-    "distance_matrix_loss",
-    "direction_loss",
+    "backbone_distance_loss",
+    "backbone_direction_loss",
     "reconstruction_loss",
 ]
