@@ -190,6 +190,11 @@ class GCPVQVAE(nn.Module):
             "total_loss": total_loss,
         }
 
+    def commit_updates(self) -> None:
+        """Apply any deferred updates inside the module."""
+
+        self.vq.commit_pending_codebook()
+
     # ----------------------------------------------------------- encode helper
     def _build_metadata(self, record: BackboneRecord) -> Dict[str, Any]:
         return {

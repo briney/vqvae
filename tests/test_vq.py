@@ -116,3 +116,28 @@ def test_vector_quantizer_perplexity_increases_after_updates() -> None:
 
     assert losses_before["perplexity"].item() == pytest.approx(1.0, abs=1e-5)
     assert losses_after["perplexity"].item() > 2.0
+
+
+def test_vector_quantizer_supports_orthogonal_regularisation_with_ema() -> None:
+    torch.manual_seed(0)
+    vq = VectorQuantizer(
+        num_codes=8,
+        dim=4,
+        beta=0.25,
+        decay=0.95,
+        rotation_trick=False,
+        orthogonal_reg_weight=1.0,
+    )
+
+    latents = torch.randn(2, 16, 4, requires_grad=True)
+    vq.train()
+    _, _, losses = vq(latents)
+    total = losses["commitment"] + losses["codebook"] + losses["orthogonality"]
+
+    total.backward()
+    assert latents.grad is not None
+    assert torch.isfinite(latents.grad).all()
+
+    # Applying the EMA update should not raise and should clear the pending tensor.
+    vq.commit_pending_codebook()
+    assert vq._pending_codebook is None
