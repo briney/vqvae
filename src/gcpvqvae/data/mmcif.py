@@ -58,6 +58,8 @@ THREE_TO_ONE: Dict[str, str] = {
     "VAL": "V",
 }
 
+CANONICAL_RESIDUES = set(THREE_TO_ONE.keys())
+
 ONE_TO_THREE: Dict[str, str] = {v: k for k, v in THREE_TO_ONE.items()}
 ONE_TO_THREE["X"] = "UNK"
 
@@ -133,7 +135,7 @@ def _build_records_from_gemmi_structure(
             if chain_id is not None and chain_name != chain_id:
                 continue
 
-            residues = list(chain.get_polymer())
+            residues = [res for res in chain.get_polymer() if res.name.upper() in CANONICAL_RESIDUES]
             if not residues:
                 continue
 
@@ -150,6 +152,8 @@ def _build_records_from_gemmi_structure(
 
             for residue in residues:
                 three_letter = residue.name.upper()
+                if three_letter not in CANONICAL_RESIDUES:
+                    continue
                 one_letter = THREE_TO_ONE.get(three_letter, "X")
                 seq_chars.append(one_letter)
                 seq_indices.append(AA_TO_INDEX.get(one_letter, AA_TO_INDEX["X"]))
@@ -185,6 +189,9 @@ def _build_records_from_gemmi_structure(
                 coords_list.append(coords_row)
                 atom_mask_list.append(atom_mask)
                 mask_list.append(all(atom_mask))
+
+            if not coords_list:
+                continue
 
             coords = torch.tensor(coords_list, dtype=torch.float32)
             mask = torch.tensor(mask_list, dtype=torch.bool)
@@ -257,7 +264,7 @@ def _build_records_from_biopython_structure(
             if chain_id is not None and chain_name != chain_id:
                 continue
 
-            residues = [res for res in chain if res.id[0] == " "]
+            residues = [res for res in chain if res.id[0] == " " and res.resname.upper() in CANONICAL_RESIDUES]
             if not residues:
                 continue
 
@@ -274,6 +281,8 @@ def _build_records_from_biopython_structure(
 
             for residue in residues:
                 three_letter = residue.resname.upper()
+                if three_letter not in CANONICAL_RESIDUES:
+                    continue
                 one_letter = THREE_TO_ONE.get(three_letter, "X")
                 seq_chars.append(one_letter)
                 seq_indices.append(AA_TO_INDEX.get(one_letter, AA_TO_INDEX["X"]))
@@ -294,6 +303,9 @@ def _build_records_from_biopython_structure(
                 coords_list.append(coords_row)
                 atom_mask_list.append(atom_mask)
                 mask_list.append(all(atom_mask))
+
+            if not coords_list:
+                continue
 
             coords = torch.tensor(coords_list, dtype=torch.float32)
             mask = torch.tensor(mask_list, dtype=torch.bool)

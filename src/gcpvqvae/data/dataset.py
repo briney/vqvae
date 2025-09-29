@@ -62,10 +62,20 @@ class BackboneDataset(Dataset):
             for record in records:
                 if self.chain_filter and record.chain_id not in self.chain_filter:
                     continue
+
+                if record.mask.sum().item() == 0:
+                    # Skip chains that do not contain any fully observed residues.
+                    # They cannot contribute to the loss and would lead to
+                    # degenerate attention masks downstream.
+                    continue
+
                 key = (record.path, record.chain_id)
                 self._keys.append(key)
                 if self._cache_enabled:
                     self._records[key] = record
+
+        if not self._keys:
+            raise ValueError("Dataset does not contain any valid backbone chains")
 
     def __len__(self) -> int:
         return len(self._keys)
