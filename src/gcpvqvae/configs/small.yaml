@@ -1,7 +1,7 @@
-# Lightweight configuration for quick smoke tests on a small mmCIF folder.
+# Small-scale configuration for quick smoke tests on a modest mmCIF folder.
 
 data:
-  root: "data/pilot"
+  root: "data/small"
   k: 12
   num_workers: 4
   cache: true
@@ -41,11 +41,11 @@ train:
   random_rotation: true
   log_interval: 5
   checkpoint_interval: 5
-  output_dir: "runs/pilot"
+  output_dir: "runs/small"
   export:
     enabled: false
   stages:
-    - name: pilot
+    - name: small
       length_cap: 512
       batch_size: 4
       base_lr: 0.0003
