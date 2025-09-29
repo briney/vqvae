@@ -106,6 +106,46 @@ def test_load_mmcif_parses_backbone(tmp_path, suffix):
 
 
 @pytest.mark.parametrize("suffix", [".cif", ".pdb"])
+def test_load_mmcif_filters_noncanonical_residues(tmp_path, suffix):
+    path = tmp_path / f"noncanonical{suffix}"
+
+    structure = gemmi.Structure()
+    structure.cell = gemmi.UnitCell(30.0, 30.0, 30.0, 90.0, 90.0, 90.0)
+
+    model = gemmi.Model("0")
+    chain = gemmi.Chain("A")
+    residue_names = ["ALA", "PTR", "GLY"]
+    for idx, name in enumerate(residue_names, start=1):
+        residue = gemmi.Residue()
+        residue.name = name
+        residue.het_flag = " "
+        residue.seqid = gemmi.SeqId(str(idx))
+        base = 3.5 * (idx - 1)
+        _add_atom(residue, "N", (base, 0.0, 0.0))
+        _add_atom(residue, "CA", (base + 1.2, 0.2, 0.0))
+        _add_atom(residue, "C", (base + 2.4, 0.0, 0.0))
+        chain.add_residue(residue)
+
+    model.add_chain(chain)
+    structure.add_model(model)
+    structure.setup_entities()
+
+    if path.suffix.lower() in {".pdb", ".ent"}:
+        structure.write_minimal_pdb(str(path))
+    else:
+        doc = structure.make_mmcif_document()
+        doc.write_file(str(path))
+
+    records = load_mmcif(str(path))
+    assert len(records) == 1
+    record = records[0]
+    assert record.chain_id == "A"
+    assert record.coords.shape[0] == 2
+    assert record.seq_string == "AG"
+    assert all(name in {"ALA", "GLY"} for name in record.residue_names)
+
+
+@pytest.mark.parametrize("suffix", [".cif", ".pdb"])
 def test_featurize_backbone_produces_expected_shapes(tmp_path, suffix):
     path = tmp_path / f"test{suffix}"
     _build_test_structure(path)
@@ -161,3 +201,13 @@ def test_dataset_and_collate(tmp_path):
     assert batch["edge_vectors"].shape[0] == batch["edge_index"].shape[1]
     assert len(batch["metadata"]) == 2
     assert len(batch["sequences"]) == 2
+
+
+def test_dataset_skips_chains_without_valid_backbone():
+    data_root = Path(__file__).resolve().parent / "test_data" / "cif_50"
+    dataset = BackboneDataset(data_root, cache=True)
+
+    assert len(dataset) > 0
+    for idx in range(len(dataset)):
+        sample = dataset[idx]
+        assert sample["mask"].any(), "dataset yielded a chain with no valid residues"
