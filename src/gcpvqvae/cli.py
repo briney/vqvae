@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 import click
+
+from gcpvqvae.system.configuration import compose_overrides
 
 try:  # Python 3.10+
     from importlib.metadata import PackageNotFoundError, version
@@ -46,7 +48,9 @@ def gpcvq() -> None:
         "Train a GCP-VQVAE model using the settings defined in CONFIG. "
         "The configuration file should provide ``data``, ``model``, and ``train`` "
         "sections as described in :mod:`gcpvqvae.system.train`.  Template files are "
-        "available under ``src/gcpvqvae/configs``."
+        "available under ``src/gcpvqvae/configs``.\n\n"
+        "Additional overrides can be supplied after CONFIG using Hydra's dotted "
+        "``key=value`` syntax.",
     ),
 )
 @click.argument(
@@ -54,12 +58,14 @@ def gpcvq() -> None:
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
     metavar="CONFIG",
 )
-def train_command(config: Path) -> None:
+@click.argument("overrides", nargs=-1, metavar="[OVERRIDE]...", type=str)
+def train_command(config: Path, overrides: Tuple[str, ...]) -> None:
     """Kick off model training with the provided configuration file."""
 
     from gcpvqvae.system.train import train as run_train
 
-    run_train(str(config))
+    raw_config = compose_overrides(config, overrides)
+    run_train(raw_config)
 
 
 @gpcvq.command(
@@ -132,7 +138,9 @@ def decode_command(tokens: Path, output_path: Optional[Path]) -> None:
     help=(
         "Evaluate a trained model checkpoint using the experiment CONFIG file. "
         "The configuration should describe the dataset split, checkpoint to load, "
-        "and metrics to compute."
+        "and metrics to compute.\n\n"
+        "Overrides can be appended after CONFIG using Hydra's dotted "
+        "``key=value`` syntax.",
     ),
 )
 @click.argument(
@@ -140,13 +148,15 @@ def decode_command(tokens: Path, output_path: Optional[Path]) -> None:
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
     metavar="CONFIG",
 )
-def eval_command(config: Path) -> None:
+@click.argument("overrides", nargs=-1, metavar="[OVERRIDE]...", type=str)
+def eval_command(config: Path, overrides: Tuple[str, ...]) -> None:
     """Run model evaluation for a specified configuration."""
 
     from gcpvqvae.system.eval import evaluate
 
     try:
-        evaluate(str(config))
+        raw_config = compose_overrides(config, overrides)
+        evaluate(raw_config)
     except NotImplementedError as exc:  # pragma: no cover - pending implementation
         raise click.ClickException(str(exc)) from exc
 
@@ -158,7 +168,9 @@ def eval_command(config: Path) -> None:
         "Inspect CONFIG for common issues and display model statistics. "
         "The validator checks for incompatible dimensions between sub-modules, "
         "invalid hyper-parameter settings, and reports the parameter counts for "
-        "each major component."
+        "each major component.\n\n"
+        "Overrides supplied after CONFIG (using Hydra's ``key=value`` syntax) "
+        "will be validated as well.",
     ),
 )
 @click.argument(
@@ -166,12 +178,14 @@ def eval_command(config: Path) -> None:
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
     metavar="CONFIG",
 )
-def validate_config_command(config: Path) -> None:
+@click.argument("overrides", nargs=-1, metavar="[OVERRIDE]...", type=str)
+def validate_config_command(config: Path, overrides: Tuple[str, ...]) -> None:
     """Validate a configuration file and print a detailed report."""
 
     from gcpvqvae.system.config_validation import format_report, validate_config
 
-    report = validate_config(config)
+    raw_config = compose_overrides(config, overrides)
+    report = validate_config(raw_config)
     click.echo(format_report(report))
     if not report.valid:
         raise click.ClickException("Configuration validation failed.")

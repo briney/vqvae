@@ -7,6 +7,7 @@ import dataclasses
 import math
 import random
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
@@ -16,8 +17,6 @@ import torch
 from torch import nn
 from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader
-
-import yaml
 
 from gcpvqvae.data.dataset import BackboneDataset, collate_backbones
 from gcpvqvae.data.mmcif import BackboneRecord, write_mmcif
@@ -284,11 +283,19 @@ def _prepare_data_config(raw: Dict[str, Any]) -> DataConfig:
 
 
 def _load_config(path: str | Path) -> Dict[str, Any]:
+    import yaml
+
     with open(path, "r", encoding="utf-8") as handle:
         config = yaml.safe_load(handle)
     if not isinstance(config, dict):
         raise ValueError("Configuration file must define a dictionary")
     return config
+
+
+def _coerce_config(config: Mapping[str, Any] | str | Path) -> Dict[str, Any]:
+    if isinstance(config, Mapping):
+        return dict(config)
+    return _load_config(config)
 
 
 def _codebook_statistics(vq: nn.Module) -> Tuple[float, float]:
@@ -394,8 +401,8 @@ def _export_samples(
 
 
 class Trainer:
-    def __init__(self, config_path: str | Path) -> None:
-        raw = _load_config(config_path)
+    def __init__(self, config: Mapping[str, Any] | str | Path) -> None:
+        raw = _coerce_config(config)
         self.data_cfg = _prepare_data_config(raw.get("data", {}))
         self.train_cfg = _prepare_train_config(raw.get("train", {}))
         self.model_cfg = build_model_config(raw.get("model"))
@@ -648,10 +655,10 @@ class Trainer:
             self.logger.info("Completed stage %s", stage.name)
 
 
-def train(config_path: str) -> None:
+def train(config: Mapping[str, Any] | str | Path) -> None:
     """Entry point mirroring the public API."""
 
-    Trainer(config_path).run()
+    Trainer(config).run()
 
 
 __all__ = ["train", "Trainer"]

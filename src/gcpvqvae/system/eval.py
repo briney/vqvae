@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -10,8 +11,6 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
-
-import yaml
 
 from gcpvqvae.data.dataset import BackboneDataset, collate_backbones
 from gcpvqvae.geometry.frames import kabsch_align
@@ -53,11 +52,19 @@ class EvalModelConfig:
 
 
 def _load_config(path: str | Path) -> Dict[str, Any]:
+    import yaml
+
     with open(path, "r", encoding="utf-8") as handle:
         raw = yaml.safe_load(handle)
     if not isinstance(raw, dict):
         raise ValueError("Configuration file must define a dictionary")
     return raw
+
+
+def _coerce_config(config: Mapping[str, Any] | str | Path) -> Dict[str, Any]:
+    if isinstance(config, Mapping):
+        return dict(config)
+    return _load_config(config)
 
 
 def _prepare_data_config(raw: Dict[str, Any]) -> EvalDataConfig:
@@ -196,10 +203,13 @@ def _log_distribution(logger, name: str, stats: Dict[str, Any]) -> None:
 
 
 class Evaluator:
-    def __init__(self, config_path: str | Path) -> None:
+    def __init__(self, config: Mapping[str, Any] | str | Path) -> None:
         self.logger = get_logger()
-        self.config_path = Path(config_path)
-        raw = _load_config(self.config_path)
+        if isinstance(config, Mapping):
+            self.config_path = None
+        else:
+            self.config_path = Path(config)
+        raw = _coerce_config(config)
         self.data_cfg = _prepare_data_config(raw.get("data", {}))
         self.runtime_cfg = _prepare_runtime_config(raw.get("eval", {}))
         self.model_cfg = _prepare_model_config(raw.get("model", {}))
@@ -420,10 +430,10 @@ class Evaluator:
         return summary
 
 
-def evaluate(config_path: str) -> Dict[str, Any]:
+def evaluate(config: Mapping[str, Any] | str | Path) -> Dict[str, Any]:
     """Run evaluation using the specified configuration file."""
 
-    return Evaluator(config_path).run()
+    return Evaluator(config).run()
 
 
 __all__ = ["evaluate", "Evaluator"]
