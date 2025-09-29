@@ -10,7 +10,7 @@ model:
   gcp:
     hidden_scalar_dim: 64
     hidden_vector_dim: 8
-    edge_scalar_dim: 16
+    edge_scalar_dim: 8
     edge_vector_dim: 1
     latent_dim: 128
     layers: 3
