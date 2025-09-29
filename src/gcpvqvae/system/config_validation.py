@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -275,10 +275,13 @@ def _build_model_summary(config: GCPVQVAEConfig) -> Tuple[Optional[ModelSummary]
     return ModelSummary(total_parameters=total, component_parameters=components, codebook=codebook_info), []
 
 
-def validate_config(path: Path) -> ValidationReport:
-    """Validate a configuration file and collect high-level statistics."""
+def validate_config(config: Mapping[str, Any] | str | Path) -> ValidationReport:
+    """Validate a configuration mapping or file and collect statistics."""
 
-    raw = _load_yaml(path)
+    if isinstance(config, Mapping):
+        raw = dict(config)
+    else:
+        raw = _load_yaml(Path(config))
     issues: List[ValidationIssue] = []
 
     model_raw = raw.get("model")
