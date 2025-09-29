@@ -24,6 +24,15 @@ def _broadcast_mask(mask: Optional[Tensor], length: int) -> Optional[Tensor]:
     return mask.unsqueeze(-1).expand(-1, -1, 3).reshape(mask.shape[0], length * 3)
 
 
+def _zero_loss_like(tensor: Tensor) -> Tensor:
+    """Return a zero scalar that preserves gradients for ``tensor``."""
+
+    zero = torch.zeros((), device=tensor.device, dtype=tensor.dtype)
+    if tensor.requires_grad:
+        zero = zero.requires_grad_()
+    return zero
+
+
 def aligned_mse(
     pred: Tensor,
     target: Tensor,
@@ -44,7 +53,7 @@ def aligned_mse(
         if mask_flat is not None:
             mask_i = mask_flat[i]
             if mask_i.sum() < 3:
-                losses.append(torch.zeros((), device=pred.device, dtype=pred.dtype))
+                losses.append(_zero_loss_like(pred_flat[i]))
                 continue
         else:
             mask_i = None
@@ -65,7 +74,7 @@ def aligned_mse(
             diff = diff[mask_i]
 
         if diff.numel() == 0:
-            losses.append(torch.zeros((), device=pred.device, dtype=pred.dtype))
+            losses.append(_zero_loss_like(pred_flat[i]))
             continue
 
         losses.append(diff.pow(2).mean())
@@ -100,7 +109,7 @@ def backbone_distance_loss(
             target_i = target_flat[i]
 
         if pred_i.size(0) < 2:
-            losses.append(torch.zeros((), device=pred.device, dtype=pred.dtype))
+            losses.append(_zero_loss_like(pred_flat[i]))
             continue
 
         pred_dist = torch.cdist(pred_i, pred_i)
@@ -164,7 +173,7 @@ def backbone_direction_loss(
             tv = target_vectors[i]
 
         if pv.size(0) < 2:
-            losses.append(torch.zeros((), device=pred.device, dtype=pred.dtype))
+            losses.append(_zero_loss_like(pred_vectors[i]))
             continue
 
         pred_dot = torch.einsum("icd,jcd->ijc", pv, pv)

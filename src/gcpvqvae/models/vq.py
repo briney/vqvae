@@ -129,6 +129,13 @@ class VectorQuantizer(nn.Module):
 
         self._initialised = False
 
+    @staticmethod
+    def _zero_loss_like(tensor: Tensor) -> Tensor:
+        zero = torch.zeros((), device=tensor.device, dtype=tensor.dtype)
+        if tensor.requires_grad:
+            zero = zero.requires_grad_()
+        return zero
+
     def _initialise_codebook(self, samples: Tensor) -> None:
         if self._initialised or samples.numel() == 0:
             return
@@ -180,10 +187,11 @@ class VectorQuantizer(nn.Module):
         if valid_latents.numel() == 0:
             quantized = torch.zeros_like(flat_latents)
             indices = torch.full((flat_latents.shape[0],), -1, dtype=torch.long, device=latents.device)
+            zero_loss = self._zero_loss_like(flat_latents)
             losses = {
-                "commitment": torch.tensor(0.0, device=latents.device, dtype=latents.dtype),
-                "codebook": torch.tensor(0.0, device=latents.device, dtype=latents.dtype),
-                "orthogonality": torch.tensor(0.0, device=latents.device, dtype=latents.dtype),
+                "commitment": self.beta * zero_loss,
+                "codebook": zero_loss,
+                "orthogonality": zero_loss,
                 "perplexity": torch.tensor(0.0, device=latents.device, dtype=latents.dtype),
             }
             quantized = quantized.reshape(original_shape)
@@ -217,7 +225,7 @@ class VectorQuantizer(nn.Module):
             identity = torch.eye(num_codes, device=latents.device, dtype=latents.dtype)
             orth_loss = ((gram - identity) ** 2).mean()
         else:
-            orth_loss = torch.tensor(0.0, device=latents.device, dtype=latents.dtype)
+            orth_loss = self._zero_loss_like(self.embedding)
 
         if self.training and self.decay < 1.0:
             with torch.no_grad():
