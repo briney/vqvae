@@ -32,14 +32,25 @@ gpcvq --help
 ### Training models
 
 Use the `train` subcommand to launch an experiment from a YAML configuration file.
-The configuration is expected to follow the schema used by
-`gcpvqvae.system.train`, with top-level `data`, `model`, and `train` sections.
-Template files are available under `src/gcpvqvae/configs`.
+Configurations follow a simple schema with top-level `data`, `model`, and `train`
+sections.  A detailed reference of every option and its default value is
+available in [`src/gcpvqvae/configs/README.md`](src/gcpvqvae/configs/README.md).
+Starter templates live alongside that document.
 
 ```bash
 # Train using a configuration file in the repository
 # (adjust the path to point at your desired template)
 gpcvq train src/gcpvqvae/configs/base.yaml
+```
+
+Any parameter can be overridden directly from the CLI using Hydra's dotted
+syntax.  Append `section.key=value` pairs after the config path to tweak
+experiments without editing files:
+
+```bash
+gpcvq train src/gcpvqvae/configs/small.yaml \
+    train.stages[0].batch_size=8 \
+    model.vq.num_codes=128
 ```
 
 You can inspect the supported options with `gpcvq train --help`:
