@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import dataclasses
 import math
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +17,7 @@ from gcpvqvae.data.dataset import BackboneDataset, collate_backbones
 from gcpvqvae.geometry.frames import kabsch_align
 from gcpvqvae.geometry.metrics import gdt_ts, tm_score
 from gcpvqvae.models.gcpvqvae import GCPVQVAE, GCPVQVAEConfig
+from gcpvqvae.system.configuration import build_model_config
 from gcpvqvae.utils.checkpoint import load_checkpoint
 from gcpvqvae.utils.logging import get_logger
 
@@ -123,34 +123,8 @@ def _prepare_model_config(raw: Dict[str, Any]) -> EvalModelConfig:
     return EvalModelConfig(checkpoint=str(raw["checkpoint"]), config=overrides)
 
 
-def _update_dataclass(instance: Any, updates: Dict[str, Any]) -> Any:
-    if not dataclasses.is_dataclass(instance) or not isinstance(updates, dict):
-        return instance
-    for key, value in updates.items():
-        if not hasattr(instance, key):
-            continue
-        current = getattr(instance, key)
-        if dataclasses.is_dataclass(current):
-            setattr(instance, key, _update_dataclass(current, value))
-        else:
-            setattr(instance, key, value)
-    return instance
-
-
 def _build_model_config(raw: Optional[Dict[str, Any]]) -> GCPVQVAEConfig:
-    config = GCPVQVAEConfig()
-    if raw:
-        for key, value in raw.items():
-            if not hasattr(config, key):
-                continue
-            current = getattr(config, key)
-            if dataclasses.is_dataclass(current):
-                setattr(config, key, _update_dataclass(current, value))
-            else:
-                setattr(config, key, value)
-        config.rotation.input_dim = None
-        config.__post_init__()
-    return config
+    return build_model_config(raw)
 
 
 def _linear_regression(x: Sequence[float], y: Sequence[float]) -> Tuple[float, float]:

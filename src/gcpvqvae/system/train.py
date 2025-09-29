@@ -23,6 +23,7 @@ from gcpvqvae.data.dataset import BackboneDataset, collate_backbones
 from gcpvqvae.data.mmcif import BackboneRecord, write_mmcif
 from gcpvqvae.geometry.metrics import rmsd
 from gcpvqvae.models.gcpvqvae import GCPVQVAE, GCPVQVAEConfig
+from gcpvqvae.system.configuration import build_model_config
 from gcpvqvae.utils.checkpoint import save_checkpoint
 from gcpvqvae.utils.logging import get_logger
 from gcpvqvae.utils.seed import seed_everything
@@ -152,36 +153,6 @@ class WarmupCosineScheduler:
 
     def step(self) -> None:
         self.update(self._step + 1)
-
-
-def _update_dataclass(instance: Any, updates: Dict[str, Any]) -> Any:
-    if not dataclasses.is_dataclass(instance) or not isinstance(updates, dict):
-        return instance
-    for key, value in updates.items():
-        if not hasattr(instance, key):
-            continue
-        current = getattr(instance, key)
-        if dataclasses.is_dataclass(current):
-            setattr(instance, key, _update_dataclass(current, value))
-        else:
-            setattr(instance, key, value)
-    return instance
-
-
-def _build_model_config(raw: Optional[Dict[str, Any]]) -> GCPVQVAEConfig:
-    config = GCPVQVAEConfig()
-    if raw:
-        for key, value in raw.items():
-            if not hasattr(config, key):
-                continue
-            current = getattr(config, key)
-            if dataclasses.is_dataclass(current):
-                setattr(config, key, _update_dataclass(current, value))
-            else:
-                setattr(config, key, value)
-        config.rotation.input_dim = None
-        config.__post_init__()
-    return config
 
 
 def _random_rotation(device: torch.device, dtype: torch.dtype) -> Tensor:
@@ -427,7 +398,7 @@ class Trainer:
         raw = _load_config(config_path)
         self.data_cfg = _prepare_data_config(raw.get("data", {}))
         self.train_cfg = _prepare_train_config(raw.get("train", {}))
-        self.model_cfg = _build_model_config(raw.get("model"))
+        self.model_cfg = build_model_config(raw.get("model"))
         self.logger = get_logger()
 
         seed_everything(self.train_cfg.seed)

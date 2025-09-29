@@ -151,6 +151,32 @@ def eval_command(config: Path) -> None:
         raise click.ClickException(str(exc)) from exc
 
 
+@gpcvq.command(
+    name="validate-config",
+    short_help="Validate and summarise a configuration file.",
+    help=(
+        "Inspect CONFIG for common issues and display model statistics. "
+        "The validator checks for incompatible dimensions between sub-modules, "
+        "invalid hyper-parameter settings, and reports the parameter counts for "
+        "each major component."
+    ),
+)
+@click.argument(
+    "config",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    metavar="CONFIG",
+)
+def validate_config_command(config: Path) -> None:
+    """Validate a configuration file and print a detailed report."""
+
+    from gcpvqvae.system.config_validation import format_report, validate_config
+
+    report = validate_config(config)
+    click.echo(format_report(report))
+    if not report.valid:
+        raise click.ClickException("Configuration validation failed.")
+
+
 def main() -> None:
     """Entry-point used by setuptools console scripts."""
 
