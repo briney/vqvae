@@ -75,6 +75,17 @@ class ExportConfig:
 
 
 @dataclass
+class WandbConfig:
+    enabled: bool = False
+    project: Optional[str] = None
+    entity: Optional[str] = None
+    run_name: Optional[str] = None
+    tags: Tuple[str, ...] = ()
+    dir: Optional[str] = None
+    mode: Optional[str] = None
+
+
+@dataclass
 class TrainConfig:
     seed: int = 42
     device: Optional[str] = None
@@ -86,6 +97,7 @@ class TrainConfig:
     output_dir: str = "runs"
     export: ExportConfig = field(default_factory=ExportConfig)
     stages: List[StageConfig] = field(default_factory=list)
+    wandb: WandbConfig = field(default_factory=WandbConfig)
 
 
 class MetricTracker:
@@ -251,6 +263,23 @@ def _prepare_train_config(raw: Dict[str, Any]) -> TrainConfig:
         on_stage_end=bool(export_cfg.get("on_stage_end", True)),
         num_samples=int(export_cfg.get("num_samples", 1)),
     )
+    wandb_cfg_raw = raw.get("wandb", {})
+    raw_tags = wandb_cfg_raw.get("tags")
+    if isinstance(raw_tags, Sequence) and not isinstance(raw_tags, (str, bytes)):
+        tags = tuple(str(tag) for tag in raw_tags)
+    elif raw_tags is None:
+        tags = ()
+    else:
+        tags = (str(raw_tags),)
+    wandb_cfg = WandbConfig(
+        enabled=bool(wandb_cfg_raw.get("enabled", False)),
+        project=wandb_cfg_raw.get("project"),
+        entity=wandb_cfg_raw.get("entity"),
+        run_name=wandb_cfg_raw.get("run_name"),
+        tags=tags,
+        dir=wandb_cfg_raw.get("dir"),
+        mode=wandb_cfg_raw.get("mode"),
+    )
     stages = [_prepare_stage_config(stage) for stage in raw.get("stages", [])]
     if not stages:
         raise ValueError("Training configuration must specify at least one stage")
@@ -266,6 +295,7 @@ def _prepare_train_config(raw: Dict[str, Any]) -> TrainConfig:
         output_dir=str(raw.get("output_dir", "runs")),
         export=export,
         stages=stages,
+        wandb=wandb_cfg,
     )
 
 
@@ -403,6 +433,7 @@ def _export_samples(
 class Trainer:
     def __init__(self, config: Mapping[str, Any] | str | Path) -> None:
         raw = _coerce_config(config)
+        self._raw_config = raw
         self.data_cfg = _prepare_data_config(raw.get("data", {}))
         self.train_cfg = _prepare_train_config(raw.get("train", {}))
         self.model_cfg = build_model_config(raw.get("model"))
@@ -430,6 +461,7 @@ class Trainer:
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         self.amp_enabled = self.train_cfg.amp and self.device.type == "cuda"
+        self._wandb_run = self._init_wandb()
 
     def _log_stage_progress(
         self,
@@ -443,12 +475,26 @@ class Trainer:
     ) -> None:
         loss_avg = trackers["loss"].average
         rec_avg = trackers["recon"].average
+        rec_total_component = trackers["recon_total_component"].average
+        rec_aligned_avg = trackers["recon_aligned_mse"].average
+        rec_distance_avg = trackers["recon_distance"].average
+        rec_direction_avg = trackers["recon_direction"].average
         rmsd_avg = trackers["rmsd"].average
         perplexity_avg = trackers["perplexity"].average
+        vq_commitment_avg = trackers["vq_commitment"].average
+        vq_codebook_avg = trackers["vq_codebook"].average
+        vq_orth_avg = trackers["vq_orthogonality"].average
         trackers["loss"].reset()
         trackers["recon"].reset()
+        trackers["recon_total_component"].reset()
+        trackers["recon_aligned_mse"].reset()
+        trackers["recon_distance"].reset()
+        trackers["recon_direction"].reset()
         trackers["rmsd"].reset()
         trackers["perplexity"].reset()
+        trackers["vq_commitment"].reset()
+        trackers["vq_codebook"].reset()
+        trackers["vq_orthogonality"].reset()
 
         util, kl = _codebook_statistics(self.model.vq)
         lr = self.optimizer.param_groups[0]["lr"]
@@ -471,6 +517,86 @@ class Trainer:
             ex_speed,
             res_speed,
         )
+
+        wandb_metrics = {
+            "train/loss/total": loss_avg,
+            "train/loss/reconstruction": rec_avg,
+            "train/loss/reconstruction_total": rec_total_component,
+            "train/loss/reconstruction_aligned_mse": rec_aligned_avg,
+            "train/loss/reconstruction_distance": rec_distance_avg,
+            "train/loss/reconstruction_direction": rec_direction_avg,
+            "train/loss/vq_commitment": vq_commitment_avg,
+            "train/loss/vq_codebook": vq_codebook_avg,
+            "train/loss/vq_orthogonality": vq_orth_avg,
+            "train/metrics/perplexity": perplexity_avg,
+            "train/metrics/rmsd": rmsd_avg,
+            "train/metrics/codebook_utilisation": util,
+            "train/metrics/codebook_kl": kl,
+            "train/optimiser/lr": lr,
+            "train/performance/sequences_per_second": ex_speed,
+            "train/performance/residues_per_second": res_speed,
+            "train/stage": stage.name,
+            "train/stage_step": stage_step,
+            "train/global_step": self.global_step,
+        }
+        self._wandb_log(wandb_metrics)
+
+    def _init_wandb(self) -> Optional[Any]:
+        cfg = self.train_cfg.wandb
+        if not cfg.enabled:
+            return None
+        try:
+            import wandb  # type: ignore[import-not-found]
+        except ModuleNotFoundError:
+            self.logger.warning(
+                "Weights & Biases logging requested but the 'wandb' package is not installed"
+            )
+            return None
+
+        init_kwargs: Dict[str, Any] = {}
+        if cfg.project:
+            init_kwargs["project"] = cfg.project
+        if cfg.entity:
+            init_kwargs["entity"] = cfg.entity
+        if cfg.run_name:
+            init_kwargs["name"] = cfg.run_name
+        if cfg.tags:
+            init_kwargs["tags"] = list(cfg.tags)
+        if cfg.dir:
+            init_kwargs["dir"] = cfg.dir
+        if cfg.mode:
+            init_kwargs["mode"] = cfg.mode
+
+        try:
+            run = wandb.init(**init_kwargs)
+        except Exception as exc:  # pragma: no cover - external dependency failure
+            self.logger.warning("Failed to initialise Weights & Biases run: %s", exc)
+            return None
+
+        if run is not None:
+            try:
+                run.config.update(self._raw_config, allow_val_change=True)
+            except Exception as exc:  # pragma: no cover - defensive logging
+                self.logger.warning("Failed to set Weights & Biases config: %s", exc)
+        return run
+
+    def _wandb_log(self, data: Dict[str, Any]) -> None:
+        if self._wandb_run is None:
+            return
+        try:
+            self._wandb_run.log(data, step=self.global_step)
+        except Exception as exc:  # pragma: no cover - external dependency failure
+            self.logger.warning("Failed to log metrics to Weights & Biases: %s", exc)
+
+    def _finish_wandb(self) -> None:
+        if self._wandb_run is None:
+            return
+        try:
+            self._wandb_run.finish()
+        except Exception as exc:  # pragma: no cover - external dependency failure
+            self.logger.warning("Failed to close Weights & Biases run: %s", exc)
+        finally:
+            self._wandb_run = None
 
     def _save_checkpoint(self, stage: StageConfig) -> None:
         ckpt_dir = self.output_dir / "checkpoints"
@@ -506,85 +632,139 @@ class Trainer:
         return loader
 
     def run(self) -> None:
-        for stage_idx, stage in enumerate(self.train_cfg.stages):
-            self.logger.info("Starting stage %d: %s", stage_idx + 1, stage.name)
+        try:
+            for stage_idx, stage in enumerate(self.train_cfg.stages):
+                self.logger.info("Starting stage %d: %s", stage_idx + 1, stage.name)
 
-            dataloader = self._build_dataloader(stage)
-            batches_per_epoch = len(dataloader)
-            total_updates = stage.effective_total_steps(batches_per_epoch)
-            scheduler = WarmupCosineScheduler(
-                self.optimizer,
-                warmup_steps=stage.warmup_steps,
-                total_steps=total_updates,
-                base_lr=stage.base_lr,
-                min_lr=stage.min_lr,
-            )
+                dataloader = self._build_dataloader(stage)
+                batches_per_epoch = len(dataloader)
+                total_updates = stage.effective_total_steps(batches_per_epoch)
+                scheduler = WarmupCosineScheduler(
+                    self.optimizer,
+                    warmup_steps=stage.warmup_steps,
+                    total_steps=total_updates,
+                    base_lr=stage.base_lr,
+                    min_lr=stage.min_lr,
+                )
 
-            trackers = {
-                "loss": MetricTracker(),
-                "recon": MetricTracker(),
-                "rmsd": MetricTracker(),
-                "perplexity": MetricTracker(),
-            }
+                trackers = {
+                    "loss": MetricTracker(),
+                    "recon": MetricTracker(),
+                    "recon_total_component": MetricTracker(),
+                    "recon_aligned_mse": MetricTracker(),
+                    "recon_distance": MetricTracker(),
+                    "recon_direction": MetricTracker(),
+                    "rmsd": MetricTracker(),
+                    "perplexity": MetricTracker(),
+                    "vq_commitment": MetricTracker(),
+                    "vq_codebook": MetricTracker(),
+                    "vq_orthogonality": MetricTracker(),
+                }
 
-            samples_since_log = 0
-            residues_since_log = 0
-            last_log_time = time.perf_counter()
+                samples_since_log = 0
+                residues_since_log = 0
+                last_log_time = time.perf_counter()
 
-            stage_step = 0
-            accum_counter = 0
+                stage_step = 0
+                accum_counter = 0
 
-            autocast_context = (
-                torch.cuda.amp.autocast if self.amp_enabled else contextlib.nullcontext
-            )
-            autocast_kwargs = {"dtype": torch.bfloat16} if self.amp_enabled else {}
+                autocast_context = (
+                    torch.cuda.amp.autocast if self.amp_enabled else contextlib.nullcontext
+                )
+                autocast_kwargs = {"dtype": torch.bfloat16} if self.amp_enabled else {}
 
-            self.optimizer.zero_grad(set_to_none=True)
+                self.optimizer.zero_grad(set_to_none=True)
 
-            while stage_step < total_updates:
-                for batch in dataloader:
-                    if self.train_cfg.random_rotation:
-                        _apply_random_rotation(batch)
-                    if stage.nan_mask_prob > 0.0:
-                        _apply_nan_mask(batch, stage.nan_mask_prob, stage.nan_mask_span)
+                while stage_step < total_updates:
+                    for batch in dataloader:
+                        if self.train_cfg.random_rotation:
+                            _apply_random_rotation(batch)
+                        if stage.nan_mask_prob > 0.0:
+                            _apply_nan_mask(batch, stage.nan_mask_prob, stage.nan_mask_span)
 
-                    with autocast_context(**autocast_kwargs):
-                        outputs = self.model(batch)
-                        loss = outputs["total_loss"] / max(stage.accumulation_steps, 1)
+                        with autocast_context(**autocast_kwargs):
+                            outputs = self.model(batch)
+                            loss = outputs["total_loss"] / max(stage.accumulation_steps, 1)
 
-                    loss.backward()
-                    if hasattr(self.model, "commit_updates"):
-                        self.model.commit_updates()
-                    accum_counter += 1
+                        loss.backward()
+                        if hasattr(self.model, "commit_updates"):
+                            self.model.commit_updates()
+                        accum_counter += 1
 
-                    batch_mask = batch["mask"]
-                    batch_size = int(batch_mask.shape[0])
-                    residue_count = int(batch_mask.sum().item())
+                        batch_mask = batch["mask"]
+                        batch_size = int(batch_mask.shape[0])
+                        residue_count = int(batch_mask.sum().item())
 
-                    trackers["loss"].update(float(outputs["total_loss"].detach().item()), batch_size)
-                    trackers["recon"].update(float(outputs["reconstruction"].detach().item()), batch_size)
-                    with torch.no_grad():
-                        target_coords = batch["coords"].to(
-                            device=self.device, dtype=outputs["decoded"].dtype
+                        trackers["loss"].update(
+                            float(outputs["total_loss"].detach().item()), batch_size
                         )
-                        rmsd_val = rmsd(outputs["decoded"].detach(), target_coords, mask=outputs["mask"]).item()
-                        trackers["rmsd"].update(rmsd_val, batch_size)
-                        trackers["perplexity"].update(
-                            float(outputs["vq_losses"]["perplexity"].detach().item())
+                        trackers["recon"].update(
+                            float(outputs["reconstruction"].detach().item()), batch_size
                         )
 
-                    samples_since_log += batch_size
-                    residues_since_log += residue_count
+                        recon_components = outputs.get("reconstruction_components")
+                        if recon_components is not None:
+                            total_component = recon_components.get("total")
+                            if total_component is not None:
+                                trackers["recon_total_component"].update(
+                                    float(total_component.detach().item()), batch_size
+                                )
+                            aligned_component = recon_components.get("aligned_mse")
+                            if aligned_component is not None:
+                                trackers["recon_aligned_mse"].update(
+                                    float(aligned_component.detach().item()), batch_size
+                                )
+                            distance_component = recon_components.get("distance")
+                            if distance_component is not None:
+                                trackers["recon_distance"].update(
+                                    float(distance_component.detach().item()), batch_size
+                                )
+                            direction_component = recon_components.get("direction")
+                            if direction_component is not None:
+                                trackers["recon_direction"].update(
+                                    float(direction_component.detach().item()), batch_size
+                                )
 
-                    if accum_counter >= stage.accumulation_steps:
-                        if self.train_cfg.clip_grad > 0:
-                            clip_grad_norm_(self.model.parameters(), self.train_cfg.clip_grad)
-                        self.optimizer.step()
-                        self.optimizer.zero_grad(set_to_none=True)
-                        scheduler.step()
-                        accum_counter = 0
+                        with torch.no_grad():
+                            target_coords = batch["coords"].to(
+                                device=self.device, dtype=outputs["decoded"].dtype
+                            )
+                            rmsd_val = rmsd(
+                                outputs["decoded"].detach(), target_coords, mask=outputs["mask"]
+                            ).item()
+                            trackers["rmsd"].update(rmsd_val, batch_size)
+                            vq_losses = outputs.get("vq_losses", {})
+                            commitment_loss = vq_losses.get("commitment")
+                            if commitment_loss is not None:
+                                trackers["vq_commitment"].update(
+                                    float(commitment_loss.detach().item()), batch_size
+                                )
+                            codebook_loss = vq_losses.get("codebook")
+                            if codebook_loss is not None:
+                                trackers["vq_codebook"].update(
+                                    float(codebook_loss.detach().item()), batch_size
+                                )
+                            orth_loss = vq_losses.get("orthogonality")
+                            if orth_loss is not None:
+                                trackers["vq_orthogonality"].update(
+                                    float(orth_loss.detach().item()), batch_size
+                                )
+                            perplexity = vq_losses.get("perplexity")
+                            if perplexity is not None:
+                                trackers["perplexity"].update(float(perplexity.detach().item()))
 
-                        stage_step += 1
+                        samples_since_log += batch_size
+                        residues_since_log += residue_count
+
+                        if accum_counter >= stage.accumulation_steps:
+                            if self.train_cfg.clip_grad > 0:
+                                clip_grad_norm_(self.model.parameters(), self.train_cfg.clip_grad)
+                            self.optimizer.step()
+                            self.optimizer.zero_grad(set_to_none=True)
+                            scheduler.step()
+                            accum_counter = 0
+
+                            stage_step += 1
                         self.global_step += 1
 
                         if (
@@ -655,6 +835,8 @@ class Trainer:
                 )
 
             self.logger.info("Completed stage %s", stage.name)
+        finally:
+            self._finish_wandb()
 
 
 def train(config: Mapping[str, Any] | str | Path) -> None:
