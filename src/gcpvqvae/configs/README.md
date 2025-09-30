@@ -17,7 +17,7 @@ omitted the defaults listed below are applied by the underlying dataclasses.
 
 | key | type | default | description |
 | --- | --- | --- | --- |
-| `root` | str | **required** | Path to an mmCIF file or directory that backs the dataset. |
+| `root` | str | **required** | Path to raw backbone data (single mmCIF/PDB file or directory) **or** to a preprocessed dataset directory containing `preprocessed_dataset.json`. |
 | `chain_ids` | sequence[str] \| null | `null` | Optional subset of chain identifiers to keep. |
 | `k` | int | `16` | Number of nearest neighbours per residue when building the kNN graph. |
 | `num_dataloader_workers` | int | `0` | DataLoader worker processes. |
