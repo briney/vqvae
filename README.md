@@ -64,6 +64,46 @@ Usage: gpcvq train [OPTIONS] CONFIG
   available under ``src/gcpvqvae/configs``.
 ```
 
+### Experiment logging with Weights & Biases
+
+Training jobs can stream metrics to [Weights & Biases](https://wandb.ai/site) by
+setting the `train.log` section of your configuration.  Enable logging and
+optionally supply a project, entity, run name, tags, working directory, or mode:
+
+```yaml
+train:
+  log:
+    enabled: true
+    project: gcp-vqvae
+    run_name: baseline-l1
+    tags: [prototype, local]
+```
+
+When activated the trainer initialises a run with the provided metadata and
+automatically reports the total loss, its reconstruction and vector-quantisation
+components, reconstruction sub-metrics, RMSD, codebook utilisation statistics,
+learning-rate schedule, and throughput figures each time progress is logged.
+
+### Loss components
+
+The model optimises a composite loss consisting of a weighted reconstruction
+term plus several vector-quantisation regularisers:
+
+- **Reconstruction loss** – combines three geometry-aware signals following the
+  GCP-VQVAE paper: an aligned mean-squared error between predicted and target
+  backbones, a pairwise backbone distance penalty, and a backbone direction
+  signature loss. These components are weighted `(5e-3, 1e-2, 5e-2)` to balance
+  local fidelity with global structure alignment.
+- **VQ commitment loss** – encourages encoder outputs to remain close to their
+  assigned codebook vectors so that quantisation remains stable.
+- **VQ codebook loss** – pulls codebook entries toward the current encoder
+  outputs, ensuring the discrete latent space tracks the data manifold.
+- **VQ orthogonality loss** – optional regulariser promoting diverse, nearly
+  orthogonal code vectors to improve codebook utilisation.
+
+The total loss is the sum of these terms, and all components are logged when
+Weights & Biases tracking is enabled to simplify debugging and comparisons.
+
 ### Evaluating checkpoints
 
 Once training has produced a checkpoint, the `eval` subcommand can be used to
