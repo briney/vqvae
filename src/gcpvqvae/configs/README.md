@@ -7,7 +7,7 @@ is organised into three top-level sections:
 - `data`: how structures are loaded and featurised
 - `model`: architecture hyper-parameters for the encoder, VQ layer, decoder and
   auxiliary heads
-- `train`: optimiser-free training loop settings and stage schedule
+- `train`: optimiser-free training loop settings, logging configuration, and stage schedule
 
 Hydra allows any value to be overridden at runtime using dotted `section.key`
 notation (see the project-wide `README.md` for examples).  When a field is
@@ -97,8 +97,25 @@ omitted the defaults listed below are applied by the underlying dataclasses.
 | `log_interval` | `50` | Number of optimisation steps between log updates. |
 | `checkpoint_interval` | `null` | Frequency (in steps) for saving checkpoints; `null` disables periodic checkpoints. |
 | `output_dir` | `"runs"` | Base directory for logs, checkpoints, and exports. |
+| `log` | see below | Nested configuration controlling experiment logging backends. |
 | `export` | see below | Nested configuration controlling structure exports. |
 | `stages` | `[]` | List of training stage dictionaries (`StageConfig`). |
+
+### `train.log` (`LogConfig`)
+
+Enable and customise Weights & Biases tracking for a run.  All fields are optional
+except `enabled`; CLI overrides such as `train.log.project=my-project` update the
+values shown below.
+
+| key | default | description |
+| --- | --- | --- |
+| `enabled` | `False` | Toggle logging to Weights & Biases. |
+| `project` | `null` | W&B project name (required when logging is enabled). |
+| `entity` | `null` | Optional W&B entity/organisation. |
+| `run_name` | `null` | Custom run display name. |
+| `tags` | `[]` | Optional list of tags applied to the run. |
+| `dir` | `null` | Directory used for W&B file artefacts (defaults to `<output_dir>`). |
+| `mode` | `null` | Advanced W&B init mode (`online`, `offline`, etc.). |
 
 ### `train.export` (`ExportConfig`)
 

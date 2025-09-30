@@ -47,6 +47,14 @@ train:
   log_interval: 100
   checkpoint_interval: 5000
   output_dir: "runs/full"
+  log:
+    enabled: false
+    project: null
+    entity: null
+    run_name: null
+    tags: []
+    dir: null
+    mode: null
   export:
     enabled: true
     directory: "runs/full/exports"

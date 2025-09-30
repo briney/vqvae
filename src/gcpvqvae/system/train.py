@@ -75,7 +75,7 @@ class ExportConfig:
 
 
 @dataclass
-class WandbConfig:
+class LogConfig:
     enabled: bool = False
     project: Optional[str] = None
     entity: Optional[str] = None
@@ -97,7 +97,7 @@ class TrainConfig:
     output_dir: str = "runs"
     export: ExportConfig = field(default_factory=ExportConfig)
     stages: List[StageConfig] = field(default_factory=list)
-    wandb: WandbConfig = field(default_factory=WandbConfig)
+    log: LogConfig = field(default_factory=LogConfig)
 
 
 class MetricTracker:
@@ -263,22 +263,33 @@ def _prepare_train_config(raw: Dict[str, Any]) -> TrainConfig:
         on_stage_end=bool(export_cfg.get("on_stage_end", True)),
         num_samples=int(export_cfg.get("num_samples", 1)),
     )
-    wandb_cfg_raw = raw.get("wandb", {})
-    raw_tags = wandb_cfg_raw.get("tags")
+    log_cfg_raw = raw.get("log")
+    if log_cfg_raw is None:
+        # Backwards compatibility for configurations that still use the old "wandb" key.
+        log_cfg_raw = raw.get("wandb", {})
+    raw_tags = log_cfg_raw.get("tags") if isinstance(log_cfg_raw, Mapping) else None
+    if isinstance(log_cfg_raw, Mapping) and "wandb" in log_cfg_raw and not raw_tags:
+        # Accept nested ``train.log.wandb`` entries while the configuration files migrate.
+        nested = log_cfg_raw.get("wandb")
+        if isinstance(nested, Mapping):
+            raw_tags = nested.get("tags")
+            log_cfg_raw = nested
+    if not isinstance(log_cfg_raw, Mapping):
+        log_cfg_raw = {}
     if isinstance(raw_tags, Sequence) and not isinstance(raw_tags, (str, bytes)):
         tags = tuple(str(tag) for tag in raw_tags)
     elif raw_tags is None:
         tags = ()
     else:
         tags = (str(raw_tags),)
-    wandb_cfg = WandbConfig(
-        enabled=bool(wandb_cfg_raw.get("enabled", False)),
-        project=wandb_cfg_raw.get("project"),
-        entity=wandb_cfg_raw.get("entity"),
-        run_name=wandb_cfg_raw.get("run_name"),
+    log_cfg = LogConfig(
+        enabled=bool(log_cfg_raw.get("enabled", False)),
+        project=log_cfg_raw.get("project"),
+        entity=log_cfg_raw.get("entity"),
+        run_name=log_cfg_raw.get("run_name"),
         tags=tags,
-        dir=wandb_cfg_raw.get("dir"),
-        mode=wandb_cfg_raw.get("mode"),
+        dir=log_cfg_raw.get("dir"),
+        mode=log_cfg_raw.get("mode"),
     )
     stages = [_prepare_stage_config(stage) for stage in raw.get("stages", [])]
     if not stages:
@@ -295,7 +306,7 @@ def _prepare_train_config(raw: Dict[str, Any]) -> TrainConfig:
         output_dir=str(raw.get("output_dir", "runs")),
         export=export,
         stages=stages,
-        wandb=wandb_cfg,
+        log=log_cfg,
     )
 
 
@@ -542,7 +553,7 @@ class Trainer:
         self._wandb_log(wandb_metrics)
 
     def _init_wandb(self) -> Optional[Any]:
-        cfg = self.train_cfg.wandb
+        cfg = self.train_cfg.log
         if not cfg.enabled:
             return None
         try:
