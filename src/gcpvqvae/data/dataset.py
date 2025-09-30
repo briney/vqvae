@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import torch
 from torch.utils.data import Dataset
@@ -12,6 +13,10 @@ from .featurize import featurize_backbone
 from .mmcif import PAD_INDEX, BackboneRecord, load_mmcif
 
 Tensor = torch.Tensor
+
+PREPROCESSED_MANIFEST = "preprocessed_dataset.json"
+PREPROCESSED_SAMPLES_DIR = "samples"
+PREPROCESSED_VERSION = 1
 
 try:  # pragma: no cover - tqdm is optional at runtime
     from tqdm.auto import tqdm
@@ -57,6 +62,67 @@ def _discover_files(root: Path) -> List[Path]:
     return files
 
 
+def _clone_nested(value: Any) -> Any:
+    if isinstance(value, torch.Tensor):
+        return value.clone()
+    if isinstance(value, dict):
+        return {key: _clone_nested(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_clone_nested(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_clone_nested(item) for item in value)
+    return value
+
+
+def _trim_sample(sample: Dict[str, Any], max_length: int) -> Dict[str, Any]:
+    if max_length <= 0:
+        return sample
+
+    seq_length = int(sample["coords"].shape[0])  # type: ignore[index]
+    if seq_length <= max_length:
+        return sample
+
+    slice_obj = slice(0, max_length)
+    tensor_keys = [
+        "coords",
+        "mask",
+        "atom_mask",
+        "seq",
+        "nan_mask",
+        "node_scalars",
+        "node_vectors",
+        "backbone_vectors",
+        "torsion_angles",
+    ]
+    for key in tensor_keys:
+        if key in sample and isinstance(sample[key], torch.Tensor):
+            sample[key] = sample[key][slice_obj]
+
+    if "edge_index" in sample and isinstance(sample["edge_index"], torch.Tensor):
+        edge_index = sample["edge_index"]
+        valid = (edge_index < max_length).all(dim=0)
+        sample["edge_index"] = edge_index[:, valid]
+        for edge_key in ("edge_scalars", "edge_vectors", "edge_frames"):
+            if edge_key in sample and isinstance(sample[edge_key], torch.Tensor):
+                sample[edge_key] = sample[edge_key][valid]
+
+    if "seq_str" in sample and isinstance(sample["seq_str"], str):
+        sample["seq_str"] = sample["seq_str"][:max_length]
+
+    metadata = sample.get("metadata")
+    if isinstance(metadata, dict):
+        trimmed = dict(metadata)
+        if "sequence" in trimmed and isinstance(trimmed["sequence"], str):
+            trimmed["sequence"] = trimmed["sequence"][:max_length]
+        if "residue_ids" in trimmed and isinstance(trimmed["residue_ids"], list):
+            trimmed["residue_ids"] = trimmed["residue_ids"][:max_length]
+        if "residue_names" in trimmed and isinstance(trimmed["residue_names"], list):
+            trimmed["residue_names"] = trimmed["residue_names"][:max_length]
+        sample["metadata"] = trimmed
+
+    return sample
+
+
 class BackboneDataset(Dataset):
     """Dataset of protein backbones ready for GCP featurization."""
 
@@ -78,8 +144,19 @@ class BackboneDataset(Dataset):
         self.k = k
         self.chain_filter = set(chain_ids) if chain_ids is not None else None
         self._cache_enabled = cache
-        self._records: Dict[Tuple[str, str], BackboneRecord] = {}
+        self._records: Dict[Tuple[str, str], BackboneRecord | Dict[str, Any]] = {}
         self._keys: List[Tuple[str, str]] = []
+        self._preprocessed = False
+        self._preprocessed_files: List[Path] = []
+        self._source_length_cap: Optional[int] = None
+
+        if self.root.is_dir():
+            manifest_path = self.root / PREPROCESSED_MANIFEST
+            if manifest_path.is_file():
+                self._init_from_preprocessed(manifest_path, chain_ids, length_cap, k)
+                if not self._keys:
+                    raise ValueError("Dataset does not contain any valid backbone chains")
+                return
 
         files = _discover_files(self.root)
 
@@ -120,7 +197,9 @@ class BackboneDataset(Dataset):
 
     def _get_record(self, key: Tuple[str, str]) -> BackboneRecord:
         if self._cache_enabled and key in self._records:
-            return self._records[key]
+            cached = self._records[key]
+            if isinstance(cached, BackboneRecord):
+                return cached
 
         path, chain_id = key
         records = load_mmcif(path, chain_id=chain_id, length_cap=self.length_cap)
@@ -133,6 +212,8 @@ class BackboneDataset(Dataset):
 
     def __getitem__(self, index: int) -> Dict[str, Tensor | Dict[str, object]]:
         key = self._keys[index]
+        if self._preprocessed:
+            return self._get_preprocessed_sample(index, key)
         record = self._get_record(key)
 
         features = featurize_backbone(record, k=self.k)
@@ -165,6 +246,96 @@ class BackboneDataset(Dataset):
             },
         }
 
+        return sample
+
+    def _init_from_preprocessed(
+        self,
+        manifest_path: Path,
+        chain_ids: Optional[Iterable[str]],
+        length_cap: int,
+        k: int,
+    ) -> None:
+        with manifest_path.open("r", encoding="utf-8") as handle:
+            manifest = json.load(handle)
+
+        version = manifest.get("version")
+        if version != PREPROCESSED_VERSION:
+            raise ValueError(
+                f"Unsupported preprocessed dataset version {version!r}; expected {PREPROCESSED_VERSION}"
+            )
+
+        manifest_k = manifest.get("k")
+        if manifest_k is not None and manifest_k != k:
+            raise ValueError(
+                f"Preprocessed dataset was generated with k={manifest_k} "
+                f"but k={k} was requested"
+            )
+
+        entries = manifest.get("entries")
+        if not isinstance(entries, list):
+            raise ValueError("Invalid preprocessed dataset manifest: missing 'entries'")
+
+        chain_filter = set(chain_ids) if chain_ids is not None else None
+
+        filtered: List[Dict[str, Any]] = []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            chain_id = entry.get("chain_id")
+            file_rel = entry.get("file")
+            if not isinstance(chain_id, str) or not isinstance(file_rel, str):
+                continue
+            if chain_filter is not None and chain_id not in chain_filter:
+                continue
+            filtered.append(entry)
+
+        if not filtered:
+            raise ValueError("Dataset does not contain any valid backbone chains")
+
+        source_length_cap = manifest.get("length_cap")
+        if isinstance(source_length_cap, int) and source_length_cap > 0:
+            self._source_length_cap = source_length_cap
+        else:
+            self._source_length_cap = None
+
+        self.length_cap = length_cap
+        if self._source_length_cap is not None:
+            self.length_cap = min(self.length_cap, self._source_length_cap)
+        self.k = manifest_k if isinstance(manifest_k, int) and manifest_k > 0 else k
+        self.chain_filter = chain_filter
+        self._preprocessed = True
+        self._preprocessed_files = []
+        self._keys = []
+
+        for entry in filtered:
+            file_rel = entry["file"]
+            sample_path = manifest_path.parent / file_rel
+            if not sample_path.exists():
+                raise FileNotFoundError(sample_path)
+            source_path = entry.get("source_path")
+            if not isinstance(source_path, str):
+                source_path = str(sample_path)
+            chain_id = entry["chain_id"]
+            key = (source_path, chain_id)
+            self._keys.append(key)
+            self._preprocessed_files.append(sample_path)
+
+    def _get_preprocessed_sample(
+        self, index: int, key: Tuple[str, str]
+    ) -> Dict[str, Tensor | Dict[str, object]]:
+        if self._cache_enabled and key in self._records:
+            cached = self._records[key]
+        else:
+            sample_path = self._preprocessed_files[index]
+            cached = torch.load(sample_path, map_location="cpu")
+            if not isinstance(cached, dict):
+                raise TypeError(f"Preprocessed sample at {sample_path} is not a mapping")
+            if self._cache_enabled:
+                self._records[key] = cached
+
+        sample = _clone_nested(cached)
+        if self.length_cap and self.length_cap > 0:
+            sample = _trim_sample(sample, self.length_cap)
         return sample
 
 
@@ -266,4 +437,10 @@ def collate_backbones(batch: List[Dict[str, Tensor | Dict[str, object]]]) -> Dic
     }
 
 
-__all__ = ["BackboneDataset", "collate_backbones"]
+__all__ = [
+    "BackboneDataset",
+    "collate_backbones",
+    "PREPROCESSED_MANIFEST",
+    "PREPROCESSED_SAMPLES_DIR",
+    "PREPROCESSED_VERSION",
+]

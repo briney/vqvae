@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Dict, List
 
+import gemmi
 import torch
 from torch import nn
 from torch.utils.data import Dataset
@@ -9,6 +11,7 @@ from torch.utils.data import Dataset
 import yaml
 import pytest
 
+from gcpvqvae.data.preprocessing import preprocess_dataset
 from gcpvqvae.system import eval as eval_module
 
 
@@ -65,6 +68,46 @@ class FakeDataset(Dataset):
         return self.samples[index]
 
 
+def _build_eval_structure(path: Path) -> None:
+    structure = gemmi.Structure()
+    structure.cell = gemmi.UnitCell(30.0, 30.0, 30.0, 90.0, 90.0, 90.0)
+
+    model = gemmi.Model("0")
+    chain = gemmi.Chain("A")
+    for idx in range(1, 3):
+        residue = gemmi.Residue()
+        residue.name = "GLY"
+        residue.het_flag = " "
+        residue.seqid = gemmi.SeqId(str(idx))
+        base = 3.8 * (idx - 1)
+
+        atom_n = gemmi.Atom()
+        atom_n.name = "N"
+        atom_n.pos = gemmi.Position(base, 0.0, 0.0)
+        atom_n.occ = 1.0
+        residue.add_atom(atom_n)
+
+        atom_ca = gemmi.Atom()
+        atom_ca.name = "CA"
+        atom_ca.pos = gemmi.Position(base + 1.2, 0.3, 0.0)
+        atom_ca.occ = 1.0
+        residue.add_atom(atom_ca)
+
+        atom_c = gemmi.Atom()
+        atom_c.name = "C"
+        atom_c.pos = gemmi.Position(base + 2.3, 0.1, 0.0)
+        atom_c.occ = 1.0
+        residue.add_atom(atom_c)
+
+        chain.add_residue(residue)
+    model.add_chain(chain)
+
+    structure.add_model(model)
+    structure.setup_entities()
+    doc = structure.make_mmcif_document()
+    doc.write_file(str(path))
+
+
 def fake_collate(batch: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
     max_len = max(item["coords"].shape[0] for item in batch)
     batch_size = len(batch)
@@ -102,7 +145,19 @@ class FakeModel(nn.Module):
 
 
 def test_evaluate_reports_summary(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(eval_module, "BackboneDataset", FakeDataset)
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    raw_path = raw_dir / "toy.cif"
+    _build_eval_structure(raw_path)
+
+    processed_dir = tmp_path / "processed"
+    preprocess_dataset(raw_dir, processed_dir, k=1, progress=False)
+
+    def dataset_factory(root, **kwargs):
+        assert Path(root) == processed_dir
+        return FakeDataset(str(root), **kwargs)
+
+    monkeypatch.setattr(eval_module, "BackboneDataset", dataset_factory)
     monkeypatch.setattr(eval_module, "collate_backbones", fake_collate)
     monkeypatch.setattr(eval_module, "GCPVQVAE", FakeModel)
 
@@ -112,7 +167,7 @@ def test_evaluate_reports_summary(tmp_path, monkeypatch) -> None:
 
     config = {
         "data": {
-            "root": "unused",
+            "root": str(processed_dir),
             "k": 1,
             "num_dataloader_workers": 0,
             "cache": False,
