@@ -21,8 +21,10 @@ class FakeDataset(Dataset):
         length_cap: int = 0,
         k: int = 0,
         cache: bool = True,
+        progress: bool = True,
+        num_workers=None,
     ) -> None:
-        del chain_ids, length_cap, k, cache
+        del chain_ids, length_cap, k, cache, progress, num_workers
         self.samples: List[Dict[str, torch.Tensor]] = []
 
         coords_a = torch.tensor(

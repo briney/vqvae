@@ -32,6 +32,8 @@ class EvalDataConfig:
     k: int = 16
     num_workers: int = 0
     cache: bool = True
+    parser_workers: Optional[int] = None
+    progress: bool = True
 
 
 @dataclass
@@ -82,6 +84,12 @@ def _prepare_data_config(raw: Dict[str, Any]) -> EvalDataConfig:
         k=int(raw.get("k", 16)),
         num_workers=int(raw.get("num_workers", 0)),
         cache=bool(raw.get("cache", True)),
+        parser_workers=(
+            int(raw["parser_workers"])
+            if raw.get("parser_workers") is not None
+            else None
+        ),
+        progress=bool(raw.get("progress", True)),
     )
 
 
@@ -230,6 +238,8 @@ class Evaluator:
             length_cap=self.data_cfg.length_cap,
             k=self.data_cfg.k,
             cache=self.data_cfg.cache,
+            progress=self.data_cfg.progress,
+            num_workers=self.data_cfg.parser_workers,
         )
         if len(dataset) == 0:
             raise ValueError("Evaluation dataset is empty")

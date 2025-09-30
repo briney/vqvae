@@ -115,7 +115,7 @@ def test_model_forward_runs(tmp_path, suffix) -> None:
     structure_path = Path(tmp_path) / f"toy{suffix}"
     _build_test_structure(structure_path)
 
-    dataset = BackboneDataset(structure_path, k=2)
+    dataset = BackboneDataset(structure_path, k=2, progress=False)
     batch = collate_backbones([dataset[0]])
 
     model = GCPVQVAE(_make_config())

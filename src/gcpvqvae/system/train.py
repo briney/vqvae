@@ -39,6 +39,8 @@ class DataConfig:
     k: int = 16
     num_workers: int = 0
     cache: bool = True
+    parser_workers: Optional[int] = None
+    progress: bool = True
 
 
 @dataclass
@@ -97,6 +99,8 @@ class EvalDuringTrainingConfig:
     chain_ids: Optional[Tuple[str, ...]] = None
     k: Optional[int] = None
     cache: Optional[bool] = None
+    parser_workers: Optional[int] = None
+    progress: Optional[bool] = None
     tm_score: bool = True
     gdt_ts: bool = False
     histogram_bins: int = 20
@@ -407,12 +411,16 @@ def _prepare_data_config(raw: Dict[str, Any]) -> DataConfig:
     root = raw.get("root")
     if root is None:
         raise ValueError("Data configuration requires a 'root' path")
+    parser_workers_raw = raw.get("parser_workers")
+    parser_workers = int(parser_workers_raw) if parser_workers_raw is not None else None
     return DataConfig(
         root=str(root),
         chain_ids=raw.get("chain_ids"),
         k=int(raw.get("k", 16)),
         num_workers=int(raw.get("num_workers", 0)),
         cache=bool(raw.get("cache", True)),
+        parser_workers=parser_workers,
+        progress=bool(raw.get("progress", True)),
     )
 
 
@@ -742,6 +750,8 @@ class Trainer:
             length_cap=stage.length_cap,
             k=self.data_cfg.k,
             cache=self.data_cfg.cache,
+            progress=self.data_cfg.progress,
+            num_workers=self.data_cfg.parser_workers,
         )
         loader = DataLoader(
             dataset,
@@ -773,6 +783,16 @@ class Trainer:
             length_cap=length_cap,
             k=self.eval_cfg.k if self.eval_cfg.k is not None else self.data_cfg.k,
             cache=self.eval_cfg.cache if self.eval_cfg.cache is not None else self.data_cfg.cache,
+            progress=(
+                self.eval_cfg.progress
+                if self.eval_cfg.progress is not None
+                else self.data_cfg.progress
+            ),
+            num_workers=(
+                self.eval_cfg.parser_workers
+                if self.eval_cfg.parser_workers is not None
+                else self.data_cfg.parser_workers
+            ),
         )
         if len(dataset) == 0:
             self.logger.warning(

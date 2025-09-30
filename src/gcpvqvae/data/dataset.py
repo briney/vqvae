@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ProcessPoolExecutor
+from multiprocessing import get_context
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import torch
 from torch.utils.data import Dataset
@@ -12,6 +14,29 @@ from .featurize import featurize_backbone
 from .mmcif import PAD_INDEX, BackboneRecord, load_mmcif
 
 Tensor = torch.Tensor
+
+try:  # pragma: no cover - tqdm is optional at runtime
+    from tqdm.auto import tqdm
+except Exception:  # pragma: no cover - tqdm is optional
+    tqdm = None
+
+
+def _load_records_for_dataset(args: Tuple[str, int, Optional[Sequence[str]]]) -> List[BackboneRecord]:
+    path, length_cap, chain_filter = args
+    chains = set(chain_filter) if chain_filter is not None else None
+
+    records = load_mmcif(path, length_cap=length_cap)
+    filtered: List[BackboneRecord] = []
+    for record in records:
+        if chains is not None and record.chain_id not in chains:
+            continue
+
+        if record.mask.sum().item() == 0:
+            continue
+
+        filtered.append(record)
+
+    return filtered
 
 
 def _discover_files(root: Path) -> List[Path]:
@@ -45,6 +70,8 @@ class BackboneDataset(Dataset):
         length_cap: int = 2048,
         k: int = 16,
         cache: bool = True,
+        progress: bool = True,
+        num_workers: Optional[int] = None,
     ) -> None:
         self.root = Path(root)
         if not self.root.exists():
@@ -57,28 +84,52 @@ class BackboneDataset(Dataset):
         self._records: Dict[Tuple[str, str], BackboneRecord] = {}
         self._keys: List[Tuple[str, str]] = []
 
-        for file in _discover_files(self.root):
-            records = load_mmcif(str(file), length_cap=length_cap)
-            for record in records:
-                if self.chain_filter and record.chain_id not in self.chain_filter:
-                    continue
+        files = _discover_files(self.root)
 
-                if record.mask.sum().item() == 0:
-                    # Skip chains that do not contain any fully observed residues.
-                    # They cannot contribute to the loss and would lead to
-                    # degenerate attention masks downstream.
-                    continue
+        total = len(files)
+        show_progress = progress and tqdm is not None and total > 0
+        progress_bar = None
+        if show_progress:
+            progress_bar = tqdm(total=total, desc="Parsing backbone files")
 
-                key = (record.path, record.chain_id)
-                self._keys.append(key)
-                if self._cache_enabled:
-                    self._records[key] = record
+        chain_filter: Optional[Sequence[str]]
+        if self.chain_filter is not None:
+            chain_filter = sorted(self.chain_filter)
+        else:
+            chain_filter = None
+
+        worker_count = (num_workers or 0)
+        try:
+            if worker_count > 1 and total > 1:
+                ctx = get_context("spawn")
+                with ProcessPoolExecutor(max_workers=worker_count, mp_context=ctx) as executor:
+                    args = [(str(file), length_cap, chain_filter) for file in files]
+                    for records in executor.map(_load_records_for_dataset, args):
+                        self._store_records(records)
+                        if progress_bar is not None:
+                            progress_bar.update(1)
+            else:
+                for file in files:
+                    records = _load_records_for_dataset((str(file), length_cap, chain_filter))
+                    self._store_records(records)
+                    if progress_bar is not None:
+                        progress_bar.update(1)
+        finally:
+            if progress_bar is not None:
+                progress_bar.close()
 
         if not self._keys:
             raise ValueError("Dataset does not contain any valid backbone chains")
 
     def __len__(self) -> int:
         return len(self._keys)
+
+    def _store_records(self, records: Iterable[BackboneRecord]) -> None:
+        for record in records:
+            key = (record.path, record.chain_id)
+            self._keys.append(key)
+            if self._cache_enabled:
+                self._records[key] = record
 
     def _get_record(self, key: Tuple[str, str]) -> BackboneRecord:
         if self._cache_enabled and key in self._records:
