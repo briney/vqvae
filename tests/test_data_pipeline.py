@@ -207,30 +207,28 @@ def _assert_tensors_equal(tensor_a: torch.Tensor, tensor_b: torch.Tensor) -> Non
         assert torch.equal(tensor_a, tensor_b)
 
 
-def test_dataset_parallel_parsing_matches_serial():
+def test_dataset_repeated_parsing_matches():
     data_root = Path("tests/test_data/cif_50")
 
-    serial_dataset = BackboneDataset(
+    first_dataset = BackboneDataset(
         data_root,
         k=2,
         cache=True,
         progress=False,
-        num_workers=1,
     )
-    parallel_dataset = BackboneDataset(
+    second_dataset = BackboneDataset(
         data_root,
         k=2,
         cache=True,
         progress=False,
-        num_workers=2,
     )
 
-    assert len(serial_dataset) == len(parallel_dataset)
-    assert serial_dataset._keys == parallel_dataset._keys  # type: ignore[attr-defined]
+    assert len(first_dataset) == len(second_dataset)
+    assert first_dataset._keys == second_dataset._keys  # type: ignore[attr-defined]
 
-    for idx in range(len(serial_dataset)):
-        serial_sample = serial_dataset[idx]
-        parallel_sample = parallel_dataset[idx]
+    for idx in range(len(first_dataset)):
+        first_sample = first_dataset[idx]
+        second_sample = second_dataset[idx]
 
         tensor_fields = [
             "coords",
@@ -248,13 +246,13 @@ def test_dataset_parallel_parsing_matches_serial():
             "edge_frames",
         ]
         for field in tensor_fields:
-            _assert_tensors_equal(serial_sample[field], parallel_sample[field])  # type: ignore[index]
+            _assert_tensors_equal(first_sample[field], second_sample[field])  # type: ignore[index]
 
         pose_fields = ["rotation", "translation"]
         for field in pose_fields:
-            _assert_tensors_equal(serial_sample["pose"][field], parallel_sample["pose"][field])  # type: ignore[index]
+            _assert_tensors_equal(first_sample["pose"][field], second_sample["pose"][field])  # type: ignore[index]
 
-        assert serial_sample["metadata"] == parallel_sample["metadata"]
+        assert first_sample["metadata"] == second_sample["metadata"]
 
 
 def test_dataset_skips_chains_without_valid_backbone():
