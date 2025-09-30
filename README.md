@@ -29,6 +29,33 @@ for a full overview of the available subcommands and global options.
 gpcvq --help
 ```
 
+### Preprocessing datasets
+
+Large training runs benefit from caching dataset features to disk ahead of
+time. The `preprocess-dataset` subcommand materialises the contents of an input
+mmCIF/PDB directory (or single file) into a reusable format:
+
+```bash
+gpcvq preprocess-dataset path/to/raw_structures path/to/preprocessed \
+    --length-cap 2048 --k 16
+```
+
+Running the command creates `path/to/preprocessed` containing:
+
+- `preprocessed_dataset.json` – a manifest describing the dataset version,
+  source path, preprocessing parameters (`length_cap`, `k`, and any
+  `chain_id` filters), total number of samples, and an `entries` list. Each
+  entry records the relative file name of the saved sample, its originating
+  structure path, chain identifier, primary sequence (when available), and the
+  residue count used during preprocessing.
+- `samples/XXXXXXXX.pt` – a directory of PyTorch files storing the featurised
+  chains. Each file contains the same dictionary of tensors produced during
+  on-the-fly loading, including coordinates, masks, node/edge features,
+  torsion angles, rigid-frame poses, and associated metadata.
+
+These cached datasets can be supplied to other CLI commands in place of the raw
+structures, eliminating redundant featurisation work.
+
 ### Training models
 
 Use the `train` subcommand to launch an experiment from a YAML configuration file.
@@ -41,6 +68,14 @@ Starter templates live alongside that document.
 # Train using a configuration file in the repository
 # (adjust the path to point at your desired template)
 gpcvq train src/gcpvqvae/configs/base.yaml
+```
+
+To train from a preprocessed dataset, point `data.root` at the directory
+containing `preprocessed_dataset.json`. This can be done directly in the YAML
+file or via a command-line override:
+
+```bash
+gpcvq train src/gcpvqvae/configs/base.yaml data.root=path/to/preprocessed
 ```
 
 Any parameter can be overridden directly from the CLI using Hydra's dotted
@@ -112,6 +147,13 @@ training configuration.
 
 ```bash
 gpcvq eval path/to/eval_config.yaml
+```
+
+Preprocessed datasets are also valid evaluation inputs. Override the evaluation
+configuration to reference the cached directory when needed:
+
+```bash
+gpcvq eval path/to/eval_config.yaml data.root=path/to/preprocessed
 ```
 
 If evaluation encounters an unimplemented feature, the command will exit with a
