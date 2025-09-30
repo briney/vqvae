@@ -91,9 +91,9 @@ def test_training_harness_runs_single_stage(tmp_path):
             "amp": False,
             "clip_grad": 1.0,
             "random_rotation": False,
-            "log_interval": 1,
             "checkpoint_interval": 1,
             "output_dir": str(output_dir),
+            "log": {"interval": 1},
             "export": {"enabled": False},
             "stages": [
                 {
@@ -166,9 +166,9 @@ def test_training_on_cif_dataset_decreases_loss(tmp_path, monkeypatch):
             "amp": False,
             "clip_grad": 1.0,
             "random_rotation": False,
-            "log_interval": 1,
             "checkpoint_interval": None,
             "output_dir": str(output_dir),
+            "log": {"interval": 1},
             "export": {"enabled": False},
             "stages": [
                 {

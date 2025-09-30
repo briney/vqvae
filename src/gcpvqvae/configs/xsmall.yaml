@@ -39,7 +39,6 @@ train:
   amp: false
   clip_grad: 1.0
   random_rotation: false
-  log_interval: 1
   checkpoint_interval: null
   output_dir: "runs/xsmall"
   log:
@@ -50,6 +49,7 @@ train:
     tags: []
     dir: null
     mode: null
+    interval: 1
   eval:
     interval: null
     root: null

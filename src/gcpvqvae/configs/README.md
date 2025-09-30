@@ -94,7 +94,6 @@ omitted the defaults listed below are applied by the underlying dataclasses.
 | `amp` | `True` | Enables automatic mixed precision. |
 | `clip_grad` | `1.0` | Gradient clipping value (L2 norm). |
 | `random_rotation` | `True` | Applies random SO(3) augmentation to each batch. |
-| `log_interval` | `50` | Number of optimisation steps between log updates. |
 | `checkpoint_interval` | `null` | Frequency (in steps) for saving checkpoints; `null` disables periodic checkpoints. |
 | `output_dir` | `"runs"` | Base directory for logs, checkpoints, and exports. |
 | `log` | see below | Nested configuration controlling experiment logging backends. |
@@ -116,6 +115,7 @@ values shown below.
 | `tags` | `[]` | Optional list of tags applied to the run. |
 | `dir` | `null` | Directory used for W&B file artefacts (defaults to `<output_dir>`). |
 | `mode` | `null` | Advanced W&B init mode (`online`, `offline`, etc.). |
+| `interval` | `50` | Number of optimisation steps between progress log updates. |
 
 ### `train.export` (`ExportConfig`)
 
