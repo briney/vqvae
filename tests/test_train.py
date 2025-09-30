@@ -3,6 +3,7 @@ from pathlib import Path
 import gemmi
 import yaml
 
+from gcpvqvae.data.preprocessing import preprocess_dataset
 from gcpvqvae.system.train import Trainer, train
 
 
@@ -112,6 +113,85 @@ def test_training_harness_runs_single_stage(tmp_path):
     }
 
     config_path = tmp_path / "config.yaml"
+    with open(config_path, "w", encoding="utf-8") as handle:
+        yaml.safe_dump(config, handle)
+
+    train(str(config_path))
+
+    checkpoints = list((output_dir / "checkpoints").glob("*.pt"))
+    assert checkpoints, "training did not produce checkpoints"
+
+
+def test_training_with_preprocessed_dataset(tmp_path):
+    data_path = tmp_path / "toy.cif"
+    _build_toy_structure(data_path)
+
+    processed_root = tmp_path / "processed"
+    preprocess_dataset(data_path, processed_root, k=4, progress=False)
+
+    output_dir = tmp_path / "runs"
+    config = {
+        "data": {
+            "root": str(processed_root),
+            "k": 4,
+            "num_dataloader_workers": 0,
+            "cache": True,
+        },
+        "model": {
+            "gcp": {
+                "hidden_scalar_dim": 32,
+                "hidden_vector_dim": 4,
+                "edge_scalar_dim": 8,
+                "edge_vector_dim": 1,
+                "latent_dim": 64,
+                "layers": 2,
+            },
+            "vq": {
+                "num_codes": 64,
+                "dim": 64,
+                "beta": 0.25,
+                "decay": 0.99,
+                "kmeans_iters": 1,
+            },
+            "encoder": {
+                "model_dim": 128,
+                "num_layers": 2,
+                "num_heads": 4,
+                "num_kv_heads": 2,
+            },
+            "decoder": {
+                "model_dim": 128,
+                "num_layers": 2,
+                "num_heads": 4,
+                "num_kv_heads": 1,
+            },
+        },
+        "train": {
+            "seed": 321,
+            "amp": False,
+            "clip_grad": 1.0,
+            "random_rotation": False,
+            "checkpoint_interval": 1,
+            "output_dir": str(output_dir),
+            "log": {"interval": 1},
+            "export": {"enabled": False},
+            "stages": [
+                {
+                    "name": "test",
+                    "length_cap": 512,
+                    "batch_size": 1,
+                    "base_lr": 0.001,
+                    "min_lr": 1e-5,
+                    "warmup_steps": 1,
+                    "epochs": 1,
+                    "accumulation_steps": 1,
+                    "nan_mask_prob": 0.0,
+                }
+            ],
+        },
+    }
+
+    config_path = tmp_path / "config_preprocessed.yaml"
     with open(config_path, "w", encoding="utf-8") as handle:
         yaml.safe_dump(config, handle)
 

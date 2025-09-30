@@ -42,6 +42,83 @@ def gpcvq() -> None:
 
 
 @gpcvq.command(
+    name="preprocess-dataset",
+    short_help="Precompute and cache dataset features.",
+    help=(
+        "Parse INPUT (a backbone file or directory) and write a cached representation "
+        "to OUTPUT. The resulting directory can be supplied to other commands in place "
+        "of the original structure files."
+    ),
+)
+@click.argument(
+    "input",
+    type=click.Path(exists=True, path_type=Path),
+    metavar="INPUT",
+)
+@click.argument(
+    "output",
+    type=click.Path(path_type=Path),
+    metavar="OUTPUT",
+)
+@click.option(
+    "--chain-id",
+    "chain_ids",
+    multiple=True,
+    help="Restrict preprocessing to specific chain identifiers.",
+)
+@click.option(
+    "--length-cap",
+    type=int,
+    default=2048,
+    show_default=True,
+    help="Maximum sequence length to load from the source data.",
+)
+@click.option(
+    "--k",
+    type=int,
+    default=16,
+    show_default=True,
+    help="Number of nearest neighbours to use when computing geometric features.",
+)
+@click.option(
+    "--overwrite/--no-overwrite",
+    default=False,
+    show_default=True,
+    help="Overwrite OUTPUT if it already exists.",
+)
+@click.option(
+    "--progress/--no-progress",
+    "show_progress",
+    default=True,
+    show_default=True,
+    help="Display progress while preprocessing.",
+)
+def preprocess_dataset_command(
+    input: Path,
+    output: Path,
+    chain_ids: Tuple[str, ...],
+    length_cap: int,
+    k: int,
+    overwrite: bool,
+    show_progress: bool,
+) -> None:
+    """Preprocess raw backbone data for faster reuse."""
+
+    from gcpvqvae.data.preprocessing import preprocess_dataset
+
+    manifest_path = preprocess_dataset(
+        input,
+        output,
+        chain_ids=chain_ids if chain_ids else None,
+        length_cap=length_cap,
+        k=k,
+        overwrite=overwrite,
+        progress=show_progress,
+    )
+    click.echo(f"Preprocessed dataset written to {manifest_path}")
+
+
+@gpcvq.command(
     name="train",
     short_help="Train a model from a YAML configuration file.",
     help=(
