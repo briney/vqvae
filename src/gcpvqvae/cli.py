@@ -50,7 +50,7 @@ def gpcvq() -> None:
         "sections as described in :mod:`gcpvqvae.system.train`.  Template files are "
         "available under ``src/gcpvqvae/configs``.\n\n"
         "Additional overrides can be supplied after CONFIG using Hydra's dotted "
-        "``key=value`` syntax.",
+        "``key=value`` syntax."
     ),
 )
 @click.argument(
@@ -140,7 +140,7 @@ def decode_command(tokens: Path, output_path: Optional[Path]) -> None:
         "The configuration should describe the dataset split, checkpoint to load, "
         "and metrics to compute.\n\n"
         "Overrides can be appended after CONFIG using Hydra's dotted "
-        "``key=value`` syntax.",
+        "``key=value`` syntax."
     ),
 )
 @click.argument(
@@ -170,7 +170,7 @@ def eval_command(config: Path, overrides: Tuple[str, ...]) -> None:
         "invalid hyper-parameter settings, and reports the parameter counts for "
         "each major component.\n\n"
         "Overrides supplied after CONFIG (using Hydra's ``key=value`` syntax) "
-        "will be validated as well.",
+        "will be validated as well."
     ),
 )
 @click.argument(
