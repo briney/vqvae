@@ -109,7 +109,7 @@ def test_roundtrip_rmsd_after_brief_training(tmp_path) -> None:
     structure_path = Path(tmp_path) / "toy.cif"
     _build_roundtrip_structure(structure_path)
 
-    dataset = BackboneDataset(structure_path, k=2)
+    dataset = BackboneDataset(structure_path, k=2, progress=False)
     batch = collate_backbones([dataset[0]])
 
     model = GCPVQVAE(_make_small_config())

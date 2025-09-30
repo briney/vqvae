@@ -23,6 +23,7 @@ dependencies = [
     "pyyaml",
     "hydra-core>=1.3",
     "wandb",
+    "tqdm",
 ]
 
 [project.optional-dependencies]

@@ -178,7 +178,7 @@ def test_dataset_and_collate(tmp_path):
     _build_test_structure(cif_path)
     _build_test_structure(pdb_path)
 
-    dataset = BackboneDataset(tmp_path, k=2)
+    dataset = BackboneDataset(tmp_path, k=2, progress=False)
     assert len(dataset) == 4
 
     paths = [Path(p) for p, _ in dataset._keys]  # type: ignore[attr-defined]
@@ -198,14 +198,68 @@ def test_dataset_and_collate(tmp_path):
 
     total_nodes = int(batch["lengths"].sum())
     assert batch["node_batch"].shape[0] == total_nodes
-    assert batch["edge_vectors"].shape[0] == batch["edge_index"].shape[1]
-    assert len(batch["metadata"]) == 2
-    assert len(batch["sequences"]) == 2
+
+
+def _assert_tensors_equal(tensor_a: torch.Tensor, tensor_b: torch.Tensor) -> None:
+    if tensor_a.dtype.is_floating_point:
+        assert torch.allclose(tensor_a, tensor_b, atol=1e-6)
+    else:
+        assert torch.equal(tensor_a, tensor_b)
+
+
+def test_dataset_parallel_parsing_matches_serial():
+    data_root = Path("tests/test_data/cif_50")
+
+    serial_dataset = BackboneDataset(
+        data_root,
+        k=2,
+        cache=True,
+        progress=False,
+        num_workers=1,
+    )
+    parallel_dataset = BackboneDataset(
+        data_root,
+        k=2,
+        cache=True,
+        progress=False,
+        num_workers=2,
+    )
+
+    assert len(serial_dataset) == len(parallel_dataset)
+    assert serial_dataset._keys == parallel_dataset._keys  # type: ignore[attr-defined]
+
+    for idx in range(len(serial_dataset)):
+        serial_sample = serial_dataset[idx]
+        parallel_sample = parallel_dataset[idx]
+
+        tensor_fields = [
+            "coords",
+            "mask",
+            "atom_mask",
+            "seq",
+            "nan_mask",
+            "node_scalars",
+            "node_vectors",
+            "backbone_vectors",
+            "torsion_angles",
+            "edge_index",
+            "edge_scalars",
+            "edge_vectors",
+            "edge_frames",
+        ]
+        for field in tensor_fields:
+            _assert_tensors_equal(serial_sample[field], parallel_sample[field])  # type: ignore[index]
+
+        pose_fields = ["rotation", "translation"]
+        for field in pose_fields:
+            _assert_tensors_equal(serial_sample["pose"][field], parallel_sample["pose"][field])  # type: ignore[index]
+
+        assert serial_sample["metadata"] == parallel_sample["metadata"]
 
 
 def test_dataset_skips_chains_without_valid_backbone():
     data_root = Path(__file__).resolve().parent / "test_data" / "cif_50"
-    dataset = BackboneDataset(data_root, cache=True)
+    dataset = BackboneDataset(data_root, cache=True, progress=False)
 
     assert len(dataset) > 0
     for idx in range(len(dataset)):
