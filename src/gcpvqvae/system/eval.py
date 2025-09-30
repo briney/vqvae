@@ -265,8 +265,8 @@ class Evaluator:
         model.eval()
         return model
 
+    @staticmethod
     def _align_chain(
-        self,
         predicted: Tensor,
         target: Tensor,
         mask: Tensor,
@@ -287,18 +287,38 @@ class Evaluator:
     def run(self) -> Dict[str, Any]:
         model = self._load_model()
         dataloader = self._build_dataloader()
+        return run_model_evaluation(
+            model,
+            dataloader,
+            runtime_cfg=self.runtime_cfg,
+            logger=self.logger,
+        )
 
-        rmsd_values: List[float] = []
-        tm_values: List[float] = []
-        gdt_values: List[float] = []
-        lengths: List[float] = []
-        perplexities: List[float] = []
 
-        num_codes = getattr(model.vq, "num_codes", 0)
-        code_usage = torch.zeros((num_codes,), dtype=torch.bool)
+def run_model_evaluation(
+    model: GCPVQVAE,
+    dataloader: DataLoader,
+    *,
+    runtime_cfg: EvalRuntimeConfig,
+    logger=None,
+) -> Dict[str, Any]:
+    if logger is None:
+        logger = get_logger()
 
-        total_residues = 0
+    rmsd_values: List[float] = []
+    tm_values: List[float] = []
+    gdt_values: List[float] = []
+    lengths: List[float] = []
+    perplexities: List[float] = []
 
+    num_codes = getattr(model.vq, "num_codes", 0)
+    code_usage = torch.zeros((num_codes,), dtype=torch.bool)
+
+    total_residues = 0
+
+    was_training = model.training
+    model.eval()
+    try:
         with torch.no_grad():
             for batch_idx, batch in enumerate(dataloader):
                 outputs = model(batch)
@@ -325,7 +345,7 @@ class Evaluator:
                     valid = residue_mask[i]
                     if valid.sum().item() == 0:
                         continue
-                    aligned = self._align_chain(decoded[i], target[i], valid)
+                    aligned = Evaluator._align_chain(decoded[i], target[i], valid)
                     if aligned is None:
                         continue
 
@@ -342,11 +362,11 @@ class Evaluator:
                     lengths.append(float(length))
                     total_residues += length
 
-                    if self.runtime_cfg.tm_score:
+                    if runtime_cfg.tm_score:
                         tm_val = float(tm_score(pred_sel, tgt_sel).cpu().item())
                         tm_values.append(tm_val)
 
-                    if self.runtime_cfg.gdt_ts:
+                    if runtime_cfg.gdt_ts:
                         gdt_val = float(gdt_ts(pred_sel, tgt_sel).cpu().item())
                         gdt_values.append(gdt_val)
 
@@ -367,67 +387,64 @@ class Evaluator:
                     perplexity = vq_losses["perplexity"]
                     perplexities.append(float(perplexity.detach().cpu().item()))
 
-                if (
-                    self.runtime_cfg.max_batches is not None
-                    and batch_idx + 1 >= self.runtime_cfg.max_batches
-                ):
+                if runtime_cfg.max_batches is not None and batch_idx + 1 >= runtime_cfg.max_batches:
                     break
+    finally:
+        model.train(was_training)
 
-        slope, intercept = _linear_regression(lengths, rmsd_values)
-        rmsd_stats = _distribution_summary(
-            rmsd_values, self.runtime_cfg.quantiles, self.runtime_cfg.histogram_bins
+    slope, intercept = _linear_regression(lengths, rmsd_values)
+    rmsd_stats = _distribution_summary(
+        rmsd_values, runtime_cfg.quantiles, runtime_cfg.histogram_bins
+    )
+
+    summary: Dict[str, Any] = {
+        "num_chains": len(rmsd_values),
+        "num_residues": total_residues,
+        "rmsd": rmsd_stats,
+        "length_vs_rmsd": {"slope": slope, "intercept": intercept},
+        "codebook": {
+            "num_codes": num_codes,
+            "active_codes": int(code_usage.sum().item()) if num_codes > 0 else 0,
+            "utilization": float(code_usage.float().mean().item()) if num_codes > 0 else 0.0,
+            "perplexity_mean": float(np.mean(perplexities)) if perplexities else float("nan"),
+            "perplexity_std": float(np.std(perplexities)) if perplexities else float("nan"),
+        },
+    }
+
+    if tm_values:
+        summary["tm_score"] = _distribution_summary(
+            tm_values, runtime_cfg.quantiles, runtime_cfg.histogram_bins
+        )
+    if gdt_values:
+        summary["gdt_ts"] = _distribution_summary(
+            gdt_values, runtime_cfg.quantiles, runtime_cfg.histogram_bins
         )
 
-        summary: Dict[str, Any] = {
-            "num_chains": len(rmsd_values),
-            "num_residues": total_residues,
-            "rmsd": rmsd_stats,
-            "length_vs_rmsd": {"slope": slope, "intercept": intercept},
-            "codebook": {
-                "num_codes": num_codes,
-                "active_codes": int(code_usage.sum().item()) if num_codes > 0 else 0,
-                "utilization": (
-                    float(code_usage.float().mean().item()) if num_codes > 0 else 0.0
-                ),
-                "perplexity_mean": float(np.mean(perplexities)) if perplexities else float("nan"),
-                "perplexity_std": float(np.std(perplexities)) if perplexities else float("nan"),
-            },
-        }
+    _log_distribution(logger, "RMSD", rmsd_stats)
+    if tm_values:
+        _log_distribution(logger, "TM-score", summary["tm_score"])
+    if gdt_values:
+        _log_distribution(logger, "GDT-TS", summary["gdt_ts"])
 
-        if tm_values:
-            summary["tm_score"] = _distribution_summary(
-                tm_values, self.runtime_cfg.quantiles, self.runtime_cfg.histogram_bins
-            )
-        if gdt_values:
-            summary["gdt_ts"] = _distribution_summary(
-                gdt_values, self.runtime_cfg.quantiles, self.runtime_cfg.histogram_bins
-            )
-
-        _log_distribution(self.logger, "RMSD", rmsd_stats)
-        if tm_values:
-            _log_distribution(self.logger, "TM-score", summary["tm_score"])
-        if gdt_values:
-            _log_distribution(self.logger, "GDT-TS", summary["gdt_ts"])
-
-        if math.isfinite(slope):
-            self.logger.info(
-                "Length vs RMSD slope: %.3e Å/residue (intercept %.3f Å)", slope, intercept
-            )
-        else:
-            self.logger.info("Insufficient data to estimate length vs RMSD trend")
-
-        code_summary = summary["codebook"]
-        utilization_pct = code_summary["utilization"] * 100.0
-        self.logger.info(
-            "Codebook utilization: %d/%d (%.2f%%) | perplexity mean=%.2f std=%.2f",
-            code_summary["active_codes"],
-            code_summary["num_codes"],
-            utilization_pct,
-            code_summary["perplexity_mean"],
-            code_summary["perplexity_std"],
+    if math.isfinite(slope):
+        logger.info(
+            "Length vs RMSD slope: %.3e Å/residue (intercept %.3f Å)", slope, intercept
         )
+    else:
+        logger.info("Insufficient data to estimate length vs RMSD trend")
 
-        return summary
+    code_summary = summary["codebook"]
+    utilization_pct = code_summary["utilization"] * 100.0
+    logger.info(
+        "Codebook utilization: %d/%d (%.2f%%) | perplexity mean=%.2f std=%.2f",
+        code_summary["active_codes"],
+        code_summary["num_codes"],
+        utilization_pct,
+        code_summary["perplexity_mean"],
+        code_summary["perplexity_std"],
+    )
+
+    return summary
 
 
 def evaluate(config: Mapping[str, Any] | str | Path) -> Dict[str, Any]:
@@ -436,4 +453,4 @@ def evaluate(config: Mapping[str, Any] | str | Path) -> Dict[str, Any]:
     return Evaluator(config).run()
 
 
-__all__ = ["evaluate", "Evaluator"]
+__all__ = ["evaluate", "Evaluator", "run_model_evaluation"]
