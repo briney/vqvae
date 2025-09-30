@@ -54,7 +54,7 @@ def test_training_harness_runs_single_stage(tmp_path):
         "data": {
             "root": str(data_path),
             "k": 4,
-            "num_workers": 0,
+            "num_dataloader_workers": 0,
             "cache": True,
         },
         "model": {
@@ -129,7 +129,7 @@ def test_training_on_cif_dataset_decreases_loss(tmp_path, monkeypatch):
         "data": {
             "root": str(data_root),
             "k": 4,
-            "num_workers": 0,
+            "num_dataloader_workers": 0,
             "cache": True,
         },
         "model": {

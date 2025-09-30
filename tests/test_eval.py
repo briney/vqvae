@@ -111,7 +111,12 @@ def test_evaluate_reports_summary(tmp_path, monkeypatch) -> None:
     torch.save({"model": model.state_dict(), "config": {}}, checkpoint_path)
 
     config = {
-        "data": {"root": "unused", "k": 1, "num_workers": 0, "cache": False},
+        "data": {
+            "root": "unused",
+            "k": 1,
+            "num_dataloader_workers": 0,
+            "cache": False,
+        },
         "model": {"checkpoint": str(checkpoint_path)},
         "eval": {"batch_size": 2, "tm_score": True, "gdt_ts": True, "histogram_bins": 5},
     }

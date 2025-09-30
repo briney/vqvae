@@ -5,7 +5,7 @@
 data:
   root: "data/train"          # path to a directory with mmCIF files
   k: 16                        # kNN edges per residue
-  num_workers: 8
+  num_dataloader_workers: 8
   cache: true
 
 model:
