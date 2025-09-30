@@ -84,6 +84,7 @@ class LogConfig:
     tags: Tuple[str, ...] = ()
     dir: Optional[str] = None
     mode: Optional[str] = None
+    interval: int = 50
 
 
 @dataclass
@@ -109,7 +110,6 @@ class TrainConfig:
     amp: bool = True
     clip_grad: float = 1.0
     random_rotation: bool = True
-    log_interval: int = 50
     checkpoint_interval: Optional[int] = None
     output_dir: str = "runs"
     export: ExportConfig = field(default_factory=ExportConfig)
@@ -368,6 +368,11 @@ def _prepare_train_config(raw: Dict[str, Any]) -> TrainConfig:
         tags = ()
     else:
         tags = (str(raw_tags),)
+    interval_value = None
+    if isinstance(log_cfg_raw, Mapping):
+        interval_value = log_cfg_raw.get("interval")
+    if interval_value is None:
+        interval_value = raw.get("log_interval")
     log_cfg = LogConfig(
         enabled=bool(log_cfg_raw.get("enabled", False)),
         project=log_cfg_raw.get("project"),
@@ -376,6 +381,7 @@ def _prepare_train_config(raw: Dict[str, Any]) -> TrainConfig:
         tags=tags,
         dir=log_cfg_raw.get("dir"),
         mode=log_cfg_raw.get("mode"),
+        interval=int(interval_value) if interval_value is not None else 50,
     )
     stages = [_prepare_stage_config(stage) for stage in raw.get("stages", [])]
     if not stages:
@@ -388,7 +394,6 @@ def _prepare_train_config(raw: Dict[str, Any]) -> TrainConfig:
         amp=bool(raw.get("amp", True)),
         clip_grad=float(raw.get("clip_grad", 1.0)),
         random_rotation=bool(raw.get("random_rotation", True)),
-        log_interval=int(raw.get("log_interval", 50)),
         checkpoint_interval=int(checkpoint) if checkpoint is not None else None,
         output_dir=str(raw.get("output_dir", "runs")),
         export=export,
@@ -1020,7 +1025,7 @@ class Trainer:
                                     self.logger,
                                 )
 
-                        if self.train_cfg.log_interval and stage_step % self.train_cfg.log_interval == 0:
+                        if self.train_cfg.log.interval and stage_step % self.train_cfg.log.interval == 0:
                             now = time.perf_counter()
                             self._log_stage_progress(
                                 stage,

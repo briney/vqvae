@@ -44,7 +44,6 @@ train:
   amp: true
   clip_grad: 1.0
   random_rotation: true
-  log_interval: 100
   checkpoint_interval: 5000
   output_dir: "runs/full"
   log:
@@ -55,6 +54,7 @@ train:
     tags: []
     dir: null
     mode: null
+    interval: 100
   eval:
     interval: null              # run evaluation every N optimisation steps (null disables)
     root: null                  # path to directory of evaluation PDB/mmCIF files

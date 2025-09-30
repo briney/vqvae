@@ -39,7 +39,6 @@ train:
   amp: false
   clip_grad: 1.0
   random_rotation: true
-  log_interval: 5
   checkpoint_interval: 5
   output_dir: "runs/small"
   log:
@@ -50,6 +49,7 @@ train:
     tags: []
     dir: null
     mode: null
+    interval: 5
   eval:
     interval: null
     root: null
