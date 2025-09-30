@@ -32,7 +32,6 @@ class EvalDataConfig:
     k: int = 16
     num_dataloader_workers: int = 0
     cache: bool = True
-    num_file_parser_workers: Optional[int] = None
     show_progress: bool = True
 
 
@@ -86,15 +85,6 @@ def _prepare_data_config(raw: Dict[str, Any]) -> EvalDataConfig:
             raw.get("num_dataloader_workers", raw.get("num_workers", 0))
         ),
         cache=bool(raw.get("cache", True)),
-        num_file_parser_workers=(
-            int(raw["num_file_parser_workers"])
-            if raw.get("num_file_parser_workers") is not None
-            else (
-                int(raw["parser_workers"])
-                if raw.get("parser_workers") is not None
-                else None
-            )
-        ),
         show_progress=bool(raw.get("show_progress", raw.get("progress", True))),
     )
 
@@ -245,7 +235,6 @@ class Evaluator:
             k=self.data_cfg.k,
             cache=self.data_cfg.cache,
             progress=self.data_cfg.show_progress,
-            num_workers=self.data_cfg.num_file_parser_workers,
         )
         if len(dataset) == 0:
             raise ValueError("Evaluation dataset is empty")

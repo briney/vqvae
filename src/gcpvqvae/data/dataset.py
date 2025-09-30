@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ProcessPoolExecutor
-from multiprocessing import get_context
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -71,7 +69,6 @@ class BackboneDataset(Dataset):
         k: int = 16,
         cache: bool = True,
         progress: bool = True,
-        num_workers: Optional[int] = None,
     ) -> None:
         self.root = Path(root)
         if not self.root.exists():
@@ -98,22 +95,12 @@ class BackboneDataset(Dataset):
         else:
             chain_filter = None
 
-        worker_count = (num_workers or 0)
         try:
-            if worker_count > 1 and total > 1:
-                ctx = get_context("spawn")
-                with ProcessPoolExecutor(max_workers=worker_count, mp_context=ctx) as executor:
-                    args = [(str(file), length_cap, chain_filter) for file in files]
-                    for records in executor.map(_load_records_for_dataset, args):
-                        self._store_records(records)
-                        if progress_bar is not None:
-                            progress_bar.update(1)
-            else:
-                for file in files:
-                    records = _load_records_for_dataset((str(file), length_cap, chain_filter))
-                    self._store_records(records)
-                    if progress_bar is not None:
-                        progress_bar.update(1)
+            for file in files:
+                records = _load_records_for_dataset((str(file), length_cap, chain_filter))
+                self._store_records(records)
+                if progress_bar is not None:
+                    progress_bar.update(1)
         finally:
             if progress_bar is not None:
                 progress_bar.close()

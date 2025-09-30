@@ -39,7 +39,6 @@ class DataConfig:
     k: int = 16
     num_dataloader_workers: int = 0
     cache: bool = True
-    num_file_parser_workers: Optional[int] = None
     show_progress: bool = True
 
 
@@ -99,7 +98,6 @@ class EvalDuringTrainingConfig:
     chain_ids: Optional[Tuple[str, ...]] = None
     k: Optional[int] = None
     cache: Optional[bool] = None
-    num_file_parser_workers: Optional[int] = None
     show_progress: Optional[bool] = None
     tm_score: bool = True
     gdt_ts: bool = False
@@ -334,15 +332,6 @@ def _prepare_eval_during_training_config(
         int(num_dataloader_workers_raw) if num_dataloader_workers_raw is not None else 0
     )
 
-    num_file_parser_workers_raw = raw.get("num_file_parser_workers")
-    if num_file_parser_workers_raw is None and "parser_workers" in raw:
-        num_file_parser_workers_raw = raw.get("parser_workers")
-    num_file_parser_workers = (
-        int(num_file_parser_workers_raw)
-        if num_file_parser_workers_raw is not None
-        else None
-    )
-
     show_progress_raw = raw.get("show_progress")
     if show_progress_raw is None and "progress" in raw:
         show_progress_raw = raw.get("progress")
@@ -359,7 +348,6 @@ def _prepare_eval_during_training_config(
         chain_ids=chain_ids,
         k=k_int,
         cache=cache_flag,
-        num_file_parser_workers=num_file_parser_workers,
         show_progress=show_progress,
         tm_score=bool(raw.get("tm_score", True)),
         gdt_ts=bool(raw.get("gdt_ts", False)),
@@ -442,13 +430,6 @@ def _prepare_data_config(raw: Dict[str, Any]) -> DataConfig:
         num_dataloader_workers_raw = raw.get("num_workers")
     num_dataloader_workers = int(num_dataloader_workers_raw or 0)
 
-    parser_workers_raw = raw.get("num_file_parser_workers")
-    if parser_workers_raw is None and "parser_workers" in raw:
-        parser_workers_raw = raw.get("parser_workers")
-    num_file_parser_workers = (
-        int(parser_workers_raw) if parser_workers_raw is not None else None
-    )
-
     show_progress_raw = raw.get("show_progress")
     if show_progress_raw is None and "progress" in raw:
         show_progress_raw = raw.get("progress")
@@ -458,7 +439,6 @@ def _prepare_data_config(raw: Dict[str, Any]) -> DataConfig:
         k=int(raw.get("k", 16)),
         num_dataloader_workers=num_dataloader_workers,
         cache=bool(raw.get("cache", True)),
-        num_file_parser_workers=num_file_parser_workers,
         show_progress=bool(show_progress_raw if show_progress_raw is not None else True),
     )
 
@@ -790,7 +770,6 @@ class Trainer:
             k=self.data_cfg.k,
             cache=self.data_cfg.cache,
             progress=self.data_cfg.show_progress,
-            num_workers=self.data_cfg.num_file_parser_workers,
         )
         loader = DataLoader(
             dataset,
@@ -826,11 +805,6 @@ class Trainer:
                 self.eval_cfg.show_progress
                 if self.eval_cfg.show_progress is not None
                 else self.data_cfg.show_progress
-            ),
-            num_workers=(
-                self.eval_cfg.num_file_parser_workers
-                if self.eval_cfg.num_file_parser_workers is not None
-                else self.data_cfg.num_file_parser_workers
             ),
         )
         if len(dataset) == 0:
