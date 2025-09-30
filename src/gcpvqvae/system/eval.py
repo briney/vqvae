@@ -30,10 +30,10 @@ class EvalDataConfig:
     chain_ids: Optional[Sequence[str]] = None
     length_cap: int = 2048
     k: int = 16
-    num_workers: int = 0
+    num_dataloader_workers: int = 0
     cache: bool = True
-    parser_workers: Optional[int] = None
-    progress: bool = True
+    num_file_parser_workers: Optional[int] = None
+    show_progress: bool = True
 
 
 @dataclass
@@ -82,14 +82,20 @@ def _prepare_data_config(raw: Dict[str, Any]) -> EvalDataConfig:
         chain_ids=tuple(chain_ids) if chain_ids is not None else None,
         length_cap=int(raw.get("length_cap", 2048)),
         k=int(raw.get("k", 16)),
-        num_workers=int(raw.get("num_workers", 0)),
-        cache=bool(raw.get("cache", True)),
-        parser_workers=(
-            int(raw["parser_workers"])
-            if raw.get("parser_workers") is not None
-            else None
+        num_dataloader_workers=int(
+            raw.get("num_dataloader_workers", raw.get("num_workers", 0))
         ),
-        progress=bool(raw.get("progress", True)),
+        cache=bool(raw.get("cache", True)),
+        num_file_parser_workers=(
+            int(raw["num_file_parser_workers"])
+            if raw.get("num_file_parser_workers") is not None
+            else (
+                int(raw["parser_workers"])
+                if raw.get("parser_workers") is not None
+                else None
+            )
+        ),
+        show_progress=bool(raw.get("show_progress", raw.get("progress", True))),
     )
 
 
@@ -238,8 +244,8 @@ class Evaluator:
             length_cap=self.data_cfg.length_cap,
             k=self.data_cfg.k,
             cache=self.data_cfg.cache,
-            progress=self.data_cfg.progress,
-            num_workers=self.data_cfg.parser_workers,
+            progress=self.data_cfg.show_progress,
+            num_workers=self.data_cfg.num_file_parser_workers,
         )
         if len(dataset) == 0:
             raise ValueError("Evaluation dataset is empty")
@@ -247,7 +253,7 @@ class Evaluator:
             dataset,
             batch_size=self.runtime_cfg.batch_size,
             shuffle=False,
-            num_workers=self.data_cfg.num_workers,
+            num_workers=self.data_cfg.num_dataloader_workers,
             pin_memory=self.device.type == "cuda",
             collate_fn=collate_backbones,
             drop_last=False,

@@ -3,7 +3,7 @@
 data:
   root: "data/small"
   k: 12
-  num_workers: 4
+  num_dataloader_workers: 4
   cache: true
 
 model:

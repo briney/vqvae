@@ -20,7 +20,9 @@ omitted the defaults listed below are applied by the underlying dataclasses.
 | `root` | str | **required** | Path to an mmCIF file or directory that backs the dataset. |
 | `chain_ids` | sequence[str] \| null | `null` | Optional subset of chain identifiers to keep. |
 | `k` | int | `16` | Number of nearest neighbours per residue when building the kNN graph. |
-| `num_workers` | int | `0` | DataLoader worker processes. |
+| `num_dataloader_workers` | int | `0` | DataLoader worker processes. |
+| `num_file_parser_workers` | int \| null | `null` | Parallel workers used when parsing mmCIF files. |
+| `show_progress` | bool | `True` | Display a progress bar while preprocessing structures. |
 | `cache` | bool | `True` | Whether to cache parsed mmCIF records on disk. |
 
 ## `model` section

@@ -15,7 +15,12 @@ def _write_config(path: Path, config: dict) -> Path:
 
 def _base_config() -> dict:
     return {
-        "data": {"root": "data/train", "k": 8, "num_workers": 0, "cache": False},
+        "data": {
+            "root": "data/train",
+            "k": 8,
+            "num_dataloader_workers": 0,
+            "cache": False,
+        },
         "model": {
             "gcp": {
                 "hidden_scalar_dim": 32,

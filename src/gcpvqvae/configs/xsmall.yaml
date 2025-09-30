@@ -4,7 +4,7 @@
 data:
   root: "tests/test_data/cif_50"
   k: 4
-  num_workers: 0
+  num_dataloader_workers: 0
   cache: true
 
 model:
