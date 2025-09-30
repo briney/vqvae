@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
+import importlib
+import importlib.util
 import math
 import random
 import time
@@ -17,6 +19,25 @@ import torch
 from torch import nn
 from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader
+if importlib.util.find_spec("tqdm") is not None:  # pragma: no branch - import guard
+    tqdm = importlib.import_module("tqdm.auto").tqdm
+else:  # pragma: no cover - fallback when tqdm is unavailable
+
+    class _NullTqdm:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def __enter__(self) -> "_NullTqdm":
+            return self
+
+        def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
+            return False
+
+        def update(self, *_: Any, **__: Any) -> None:
+            pass
+
+    def tqdm(*args: Any, **kwargs: Any) -> _NullTqdm:
+        return _NullTqdm()
 
 from gcpvqvae.data.dataset import BackboneDataset, collate_backbones
 from gcpvqvae.data.mmcif import BackboneRecord, write_mmcif
@@ -652,21 +673,22 @@ class Trainer:
         ex_speed = samples / denom
         res_speed = residues / denom
 
-        self.logger.info(
-            "[%s] step %d/%d | loss %.4f | rec %.4f | rmsd %.3f Å | perp %.2f | util %.2f%% | KL %.4f | lr %.2e | %.2f seq/s %.2f res/s",
-            stage.name,
-            stage_step,
-            total_steps,
-            loss_avg,
-            rec_avg,
-            rmsd_avg,
-            perplexity_avg,
-            util * 100.0,
-            kl,
-            lr,
-            ex_speed,
-            res_speed,
-        )
+        if not self.train_cfg.log.enabled:
+            self.logger.info(
+                "[%s] step %d/%d | loss %.4f | rec %.4f | rmsd %.3f Å | perp %.2f | util %.2f%% | KL %.4f | lr %.2e | %.2f seq/s %.2f res/s",
+                stage.name,
+                stage_step,
+                total_steps,
+                loss_avg,
+                rec_avg,
+                rmsd_avg,
+                perplexity_avg,
+                util * 100.0,
+                kl,
+                lr,
+                ex_speed,
+                res_speed,
+            )
 
         wandb_metrics = {
             "train/loss/total": loss_avg,
@@ -942,175 +964,181 @@ class Trainer:
 
                 self.optimizer.zero_grad(set_to_none=True)
 
-                while stage_step < total_updates:
-                    for batch in dataloader:
-                        if self.train_cfg.random_rotation:
-                            _apply_random_rotation(batch)
-                        if stage.nan_mask_prob > 0.0:
-                            _apply_nan_mask(batch, stage.nan_mask_prob, stage.nan_mask_span)
+                with tqdm(
+                    total=total_updates,
+                    desc=f"Stage {stage_idx + 1}: {stage.name}",
+                    leave=True,
+                ) as progress_bar:
+                    while stage_step < total_updates:
+                        for batch in dataloader:
+                            if self.train_cfg.random_rotation:
+                                _apply_random_rotation(batch)
+                            if stage.nan_mask_prob > 0.0:
+                                _apply_nan_mask(batch, stage.nan_mask_prob, stage.nan_mask_span)
 
-                        with autocast_context(**autocast_kwargs):
-                            outputs = self.model(batch)
-                            loss = outputs["total_loss"] / max(stage.accumulation_steps, 1)
+                            with autocast_context(**autocast_kwargs):
+                                outputs = self.model(batch)
+                                loss = outputs["total_loss"] / max(stage.accumulation_steps, 1)
 
-                        loss.backward()
-                        if hasattr(self.model, "commit_updates"):
-                            self.model.commit_updates()
-                        accum_counter += 1
+                            loss.backward()
+                            if hasattr(self.model, "commit_updates"):
+                                self.model.commit_updates()
+                            accum_counter += 1
 
-                        batch_mask = batch["mask"]
-                        batch_size = int(batch_mask.shape[0])
-                        residue_count = int(batch_mask.sum().item())
+                            batch_mask = batch["mask"]
+                            batch_size = int(batch_mask.shape[0])
+                            residue_count = int(batch_mask.sum().item())
 
-                        trackers["loss"].update(
-                            float(outputs["total_loss"].detach().item()), batch_size
-                        )
-                        trackers["recon"].update(
-                            float(outputs["reconstruction"].detach().item()), batch_size
-                        )
-
-                        recon_components = outputs.get("reconstruction_components")
-                        if recon_components is not None:
-                            total_component = recon_components.get("total")
-                            if total_component is not None:
-                                trackers["recon_total_component"].update(
-                                    float(total_component.detach().item()), batch_size
-                                )
-                            aligned_component = recon_components.get("aligned_mse")
-                            if aligned_component is not None:
-                                trackers["recon_aligned_mse"].update(
-                                    float(aligned_component.detach().item()), batch_size
-                                )
-                            distance_component = recon_components.get("distance")
-                            if distance_component is not None:
-                                trackers["recon_distance"].update(
-                                    float(distance_component.detach().item()), batch_size
-                                )
-                            direction_component = recon_components.get("direction")
-                            if direction_component is not None:
-                                trackers["recon_direction"].update(
-                                    float(direction_component.detach().item()), batch_size
-                                )
-
-                        with torch.no_grad():
-                            target_coords = batch["coords"].to(
-                                device=self.device, dtype=outputs["decoded"].dtype
+                            trackers["loss"].update(
+                                float(outputs["total_loss"].detach().item()), batch_size
                             )
-                            rmsd_val = rmsd(
-                                outputs["decoded"].detach(), target_coords, mask=outputs["mask"]
-                            ).item()
-                            trackers["rmsd"].update(rmsd_val, batch_size)
-                            vq_losses = outputs.get("vq_losses", {})
-                            commitment_loss = vq_losses.get("commitment")
-                            if commitment_loss is not None:
-                                trackers["vq_commitment"].update(
-                                    float(commitment_loss.detach().item()), batch_size
-                                )
-                            codebook_loss = vq_losses.get("codebook")
-                            if codebook_loss is not None:
-                                trackers["vq_codebook"].update(
-                                    float(codebook_loss.detach().item()), batch_size
-                                )
-                            orth_loss = vq_losses.get("orthogonality")
-                            if orth_loss is not None:
-                                trackers["vq_orthogonality"].update(
-                                    float(orth_loss.detach().item()), batch_size
-                                )
-                            perplexity = vq_losses.get("perplexity")
-                            if perplexity is not None:
-                                trackers["perplexity"].update(float(perplexity.detach().item()))
-
-                        samples_since_log += batch_size
-                        residues_since_log += residue_count
-
-                        if accum_counter >= stage.accumulation_steps:
-                            if self.train_cfg.clip_grad > 0:
-                                clip_grad_norm_(self.model.parameters(), self.train_cfg.clip_grad)
-                            self.optimizer.step()
-                            self.optimizer.zero_grad(set_to_none=True)
-                            scheduler.step()
-                            accum_counter = 0
-
-                            stage_step += 1
-                            self.global_step += 1
-
-                            self._run_eval_if_due(stage.name)
-
-                            if (
-                                self.train_cfg.checkpoint_interval
-                                and self.global_step % int(self.train_cfg.checkpoint_interval) == 0
-                            ):
-                                self._save_checkpoint(stage)
-
-                            if (
-                                self.train_cfg.export.enabled
-                                and self.train_cfg.export.every_n_steps
-                                and self.global_step % int(self.train_cfg.export.every_n_steps) == 0
-                            ):
-                                dataset = dataloader.dataset  # type: ignore[assignment]
-                                _export_samples(
-                                    self.model,
-                                    dataset,
-                                    self.train_cfg.export,
-                                    stage.name,
-                                    self.global_step,
-                                    self.output_dir,
-                                    self.logger,
-                                )
-
-                        if self.train_cfg.log.interval and stage_step % self.train_cfg.log.interval == 0:
-                            now = time.perf_counter()
-                            self._log_stage_progress(
-                                stage,
-                                stage_step,
-                                total_updates,
-                                trackers,
-                                samples_since_log,
-                                residues_since_log,
-                                now - last_log_time,
+                            trackers["recon"].update(
+                                float(outputs["reconstruction"].detach().item()), batch_size
                             )
-                            samples_since_log = 0
-                            residues_since_log = 0
-                            last_log_time = now
+
+                            recon_components = outputs.get("reconstruction_components")
+                            if recon_components is not None:
+                                total_component = recon_components.get("total")
+                                if total_component is not None:
+                                    trackers["recon_total_component"].update(
+                                        float(total_component.detach().item()), batch_size
+                                    )
+                                aligned_component = recon_components.get("aligned_mse")
+                                if aligned_component is not None:
+                                    trackers["recon_aligned_mse"].update(
+                                        float(aligned_component.detach().item()), batch_size
+                                    )
+                                distance_component = recon_components.get("distance")
+                                if distance_component is not None:
+                                    trackers["recon_distance"].update(
+                                        float(distance_component.detach().item()), batch_size
+                                    )
+                                direction_component = recon_components.get("direction")
+                                if direction_component is not None:
+                                    trackers["recon_direction"].update(
+                                        float(direction_component.detach().item()), batch_size
+                                    )
+
+                            with torch.no_grad():
+                                target_coords = batch["coords"].to(
+                                    device=self.device, dtype=outputs["decoded"].dtype
+                                )
+                                rmsd_val = rmsd(
+                                    outputs["decoded"].detach(), target_coords, mask=outputs["mask"]
+                                ).item()
+                                trackers["rmsd"].update(rmsd_val, batch_size)
+                                vq_losses = outputs.get("vq_losses", {})
+                                commitment_loss = vq_losses.get("commitment")
+                                if commitment_loss is not None:
+                                    trackers["vq_commitment"].update(
+                                        float(commitment_loss.detach().item()), batch_size
+                                    )
+                                codebook_loss = vq_losses.get("codebook")
+                                if codebook_loss is not None:
+                                    trackers["vq_codebook"].update(
+                                        float(codebook_loss.detach().item()), batch_size
+                                    )
+                                orth_loss = vq_losses.get("orthogonality")
+                                if orth_loss is not None:
+                                    trackers["vq_orthogonality"].update(
+                                        float(orth_loss.detach().item()), batch_size
+                                    )
+                                perplexity = vq_losses.get("perplexity")
+                                if perplexity is not None:
+                                    trackers["perplexity"].update(float(perplexity.detach().item()))
+
+                            samples_since_log += batch_size
+                            residues_since_log += residue_count
+
+                            if accum_counter >= stage.accumulation_steps:
+                                if self.train_cfg.clip_grad > 0:
+                                    clip_grad_norm_(self.model.parameters(), self.train_cfg.clip_grad)
+                                self.optimizer.step()
+                                self.optimizer.zero_grad(set_to_none=True)
+                                scheduler.step()
+                                accum_counter = 0
+
+                                stage_step += 1
+                                self.global_step += 1
+                                progress_bar.update(1)
+
+                                self._run_eval_if_due(stage.name)
+
+                                if (
+                                    self.train_cfg.checkpoint_interval
+                                    and self.global_step % int(self.train_cfg.checkpoint_interval) == 0
+                                ):
+                                    self._save_checkpoint(stage)
+
+                                if (
+                                    self.train_cfg.export.enabled
+                                    and self.train_cfg.export.every_n_steps
+                                    and self.global_step % int(self.train_cfg.export.every_n_steps) == 0
+                                ):
+                                    dataset = dataloader.dataset  # type: ignore[assignment]
+                                    _export_samples(
+                                        self.model,
+                                        dataset,
+                                        self.train_cfg.export,
+                                        stage.name,
+                                        self.global_step,
+                                        self.output_dir,
+                                        self.logger,
+                                    )
+
+                            if self.train_cfg.log.interval and stage_step % self.train_cfg.log.interval == 0:
+                                now = time.perf_counter()
+                                self._log_stage_progress(
+                                    stage,
+                                    stage_step,
+                                    total_updates,
+                                    trackers,
+                                    samples_since_log,
+                                    residues_since_log,
+                                    now - last_log_time,
+                                )
+                                samples_since_log = 0
+                                residues_since_log = 0
+                                last_log_time = now
+
+                            if stage_step >= total_updates:
+                                break
 
                         if stage_step >= total_updates:
                             break
 
-                if stage_step >= total_updates:
-                    break
+                    if accum_counter > 0 and stage_step < total_updates:
+                        if self.train_cfg.clip_grad > 0:
+                            clip_grad_norm_(self.model.parameters(), self.train_cfg.clip_grad)
+                        self.optimizer.step()
+                        self.optimizer.zero_grad(set_to_none=True)
+                        scheduler.step()
+                        stage_step += 1
+                        self.global_step += 1
+                        progress_bar.update(1)
+                        self._run_eval_if_due(stage.name)
 
-            # Flush any remaining gradients (unlikely when accumulation divides batches).
-            if accum_counter > 0 and stage_step < total_updates:
-                if self.train_cfg.clip_grad > 0:
-                    clip_grad_norm_(self.model.parameters(), self.train_cfg.clip_grad)
-                self.optimizer.step()
-                self.optimizer.zero_grad(set_to_none=True)
-                scheduler.step()
-                stage_step += 1
-                self.global_step += 1
-                self._run_eval_if_due(stage.name)
+                        if (
+                            self.train_cfg.checkpoint_interval
+                            and self.global_step % int(self.train_cfg.checkpoint_interval) == 0
+                        ):
+                            self._save_checkpoint(stage)
 
-                if (
-                    self.train_cfg.checkpoint_interval
-                    and self.global_step % int(self.train_cfg.checkpoint_interval) == 0
-                ):
-                    self._save_checkpoint(stage)
-
-                if (
-                    self.train_cfg.export.enabled
-                    and self.train_cfg.export.every_n_steps
-                    and self.global_step % int(self.train_cfg.export.every_n_steps) == 0
-                ):
-                    dataset = dataloader.dataset  # type: ignore[assignment]
-                    _export_samples(
-                        self.model,
-                        dataset,
-                        self.train_cfg.export,
-                        stage.name,
-                        self.global_step,
-                        self.output_dir,
-                        self.logger,
-                    )
+                        if (
+                            self.train_cfg.export.enabled
+                            and self.train_cfg.export.every_n_steps
+                            and self.global_step % int(self.train_cfg.export.every_n_steps) == 0
+                        ):
+                            dataset = dataloader.dataset  # type: ignore[assignment]
+                            _export_samples(
+                                self.model,
+                                dataset,
+                                self.train_cfg.export,
+                                stage.name,
+                                self.global_step,
+                                self.output_dir,
+                                self.logger,
+                            )
 
             if not (
                 self.train_cfg.checkpoint_interval
