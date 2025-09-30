@@ -50,6 +50,10 @@ train:
     tags: []
     dir: null
     mode: null
+  eval:
+    interval: null
+    root: null
+    batch_size: 1
   export:
     enabled: false
   stages:

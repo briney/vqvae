@@ -23,6 +23,7 @@ from gcpvqvae.data.mmcif import BackboneRecord, write_mmcif
 from gcpvqvae.geometry.metrics import rmsd
 from gcpvqvae.models.gcpvqvae import GCPVQVAE, GCPVQVAEConfig
 from gcpvqvae.system.configuration import build_model_config
+from gcpvqvae.system.eval import EvalRuntimeConfig, run_model_evaluation
 from gcpvqvae.utils.checkpoint import save_checkpoint
 from gcpvqvae.utils.logging import get_logger
 from gcpvqvae.utils.seed import seed_everything
@@ -86,6 +87,22 @@ class LogConfig:
 
 
 @dataclass
+class EvalDuringTrainingConfig:
+    interval: Optional[int] = None
+    root: Optional[str] = None
+    batch_size: int = 1
+    num_workers: int = 0
+    length_cap: Optional[int] = None
+    chain_ids: Optional[Tuple[str, ...]] = None
+    k: Optional[int] = None
+    cache: Optional[bool] = None
+    tm_score: bool = True
+    gdt_ts: bool = False
+    histogram_bins: int = 20
+    quantiles: Tuple[float, ...] = (0.05, 0.5, 0.95)
+
+
+@dataclass
 class TrainConfig:
     seed: int = 42
     device: Optional[str] = None
@@ -98,6 +115,7 @@ class TrainConfig:
     export: ExportConfig = field(default_factory=ExportConfig)
     stages: List[StageConfig] = field(default_factory=list)
     log: LogConfig = field(default_factory=LogConfig)
+    eval: Optional[EvalDuringTrainingConfig] = None
 
 
 class MetricTracker:
@@ -253,6 +271,74 @@ def _prepare_stage_config(data: Dict[str, Any]) -> StageConfig:
     )
 
 
+def _prepare_eval_during_training_config(
+    raw: Optional[Dict[str, Any]]
+) -> Optional[EvalDuringTrainingConfig]:
+    if raw is None:
+        return None
+    if not isinstance(raw, Mapping):
+        raise ValueError("train.eval must be a mapping when provided")
+
+    interval = raw.get("interval")
+    if interval is not None:
+        interval = int(interval)
+        if interval <= 0:
+            interval = None
+
+    root = raw.get("root")
+    root_path = str(root) if root is not None else None
+
+    chain_ids_raw = raw.get("chain_ids")
+    chain_ids: Optional[Tuple[str, ...]]
+    if chain_ids_raw is None:
+        chain_ids = None
+    else:
+        if not isinstance(chain_ids_raw, Sequence) or isinstance(chain_ids_raw, (str, bytes)):
+            raise ValueError("train.eval.chain_ids must be a sequence of identifiers")
+        chain_ids = tuple(str(value) for value in chain_ids_raw)
+
+    length_cap = raw.get("length_cap")
+    length_cap_int = int(length_cap) if length_cap is not None else None
+
+    k_value = raw.get("k")
+    k_int = int(k_value) if k_value is not None else None
+
+    cache_value = raw.get("cache")
+    cache_flag = bool(cache_value) if cache_value is not None else None
+
+    quantiles_raw = raw.get("quantiles")
+    if quantiles_raw is None:
+        quantiles = (0.05, 0.5, 0.95)
+    else:
+        if not isinstance(quantiles_raw, Sequence) or isinstance(
+            quantiles_raw, (str, bytes)
+        ):
+            raise ValueError("train.eval.quantiles must be a sequence of floats")
+        processed: List[float] = []
+        for value in quantiles_raw:
+            q = float(value)
+            if 0.0 <= q <= 1.0:
+                processed.append(q)
+        quantiles = tuple(processed)
+
+    histogram_bins = max(int(raw.get("histogram_bins", 20)), 1)
+
+    return EvalDuringTrainingConfig(
+        interval=interval,
+        root=root_path,
+        batch_size=int(raw.get("batch_size", 1)),
+        num_workers=int(raw.get("num_workers", 0)),
+        length_cap=length_cap_int,
+        chain_ids=chain_ids,
+        k=k_int,
+        cache=cache_flag,
+        tm_score=bool(raw.get("tm_score", True)),
+        gdt_ts=bool(raw.get("gdt_ts", False)),
+        histogram_bins=histogram_bins,
+        quantiles=quantiles,
+    )
+
+
 def _prepare_train_config(raw: Dict[str, Any]) -> TrainConfig:
     export_cfg = raw.get("export", {})
     every_n = export_cfg.get("every_n_steps")
@@ -295,6 +381,7 @@ def _prepare_train_config(raw: Dict[str, Any]) -> TrainConfig:
     if not stages:
         raise ValueError("Training configuration must specify at least one stage")
     checkpoint = raw.get("checkpoint_interval")
+    eval_cfg = _prepare_eval_during_training_config(raw.get("eval"))
     return TrainConfig(
         seed=int(raw.get("seed", 42)),
         device=raw.get("device"),
@@ -307,6 +394,7 @@ def _prepare_train_config(raw: Dict[str, Any]) -> TrainConfig:
         export=export,
         stages=stages,
         log=log_cfg,
+        eval=eval_cfg,
     )
 
 
@@ -468,6 +556,25 @@ class Trainer:
         )
 
         self.global_step = 0
+        self.eval_cfg = self.train_cfg.eval
+        self._max_stage_length = max(stage.length_cap for stage in self.train_cfg.stages)
+        self._eval_runtime_cfg: Optional[EvalRuntimeConfig] = None
+        self._eval_dataloader: Optional[DataLoader] = None
+        if (
+            self.eval_cfg is not None
+            and self.eval_cfg.interval is not None
+            and self.eval_cfg.root is not None
+        ):
+            self._eval_runtime_cfg = EvalRuntimeConfig(
+                batch_size=self.eval_cfg.batch_size,
+                device=str(self.device),
+                tm_score=self.eval_cfg.tm_score,
+                gdt_ts=self.eval_cfg.gdt_ts,
+                max_batches=None,
+                histogram_bins=self.eval_cfg.histogram_bins,
+                quantiles=self.eval_cfg.quantiles,
+            )
+
         self.output_dir = Path(self.train_cfg.output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -642,6 +749,117 @@ class Trainer:
         )
         return loader
 
+    def _build_eval_dataloader(self) -> Optional[DataLoader]:
+        if self.eval_cfg is None or self.eval_cfg.root is None:
+            return None
+
+        length_cap = (
+            self.eval_cfg.length_cap
+            if self.eval_cfg.length_cap is not None
+            else self._max_stage_length
+        )
+        dataset = BackboneDataset(
+            self.eval_cfg.root,
+            chain_ids=(
+                self.eval_cfg.chain_ids
+                if self.eval_cfg.chain_ids is not None
+                else self.data_cfg.chain_ids
+            ),
+            length_cap=length_cap,
+            k=self.eval_cfg.k if self.eval_cfg.k is not None else self.data_cfg.k,
+            cache=self.eval_cfg.cache if self.eval_cfg.cache is not None else self.data_cfg.cache,
+        )
+        if len(dataset) == 0:
+            self.logger.warning(
+                "Evaluation dataset at %s is empty; disabling on-training evaluation",
+                self.eval_cfg.root,
+            )
+            return None
+
+        loader = DataLoader(
+            dataset,
+            batch_size=self.eval_cfg.batch_size,
+            shuffle=False,
+            num_workers=self.eval_cfg.num_workers,
+            pin_memory=self.device.type == "cuda",
+            collate_fn=collate_backbones,
+            drop_last=False,
+        )
+        return loader
+
+    def _get_eval_dataloader(self) -> Optional[DataLoader]:
+        if self._eval_runtime_cfg is None:
+            return None
+        if self._eval_dataloader is None:
+            loader = self._build_eval_dataloader()
+            if loader is None:
+                self._eval_runtime_cfg = None
+            else:
+                self._eval_dataloader = loader
+        return self._eval_dataloader
+
+    def _flatten_metrics(self, prefix: str, data: Mapping[str, Any]) -> Dict[str, Any]:
+        flat: Dict[str, Any] = {}
+        for key, value in data.items():
+            name = f"{prefix}/{key}" if prefix else str(key)
+            if isinstance(value, Mapping):
+                flat.update(self._flatten_metrics(name, value))
+            else:
+                flat[name] = value
+        return flat
+
+    def _run_eval_if_due(self, stage_name: str) -> None:
+        if self.eval_cfg is None or self._eval_runtime_cfg is None:
+            return
+        interval = self.eval_cfg.interval
+        if interval is None or interval <= 0:
+            return
+        if self.global_step <= 0 or self.global_step % interval != 0:
+            return
+
+        dataloader = self._get_eval_dataloader()
+        if dataloader is None:
+            return
+
+        self.logger.info(
+            "Running evaluation at global step %d on %s (stage %s)",
+            self.global_step,
+            self.eval_cfg.root,
+            stage_name,
+        )
+        start_time = time.perf_counter()
+        was_training = self.model.training
+        try:
+            summary = run_model_evaluation(
+                self.model,
+                dataloader,
+                runtime_cfg=self._eval_runtime_cfg,
+                logger=self.logger,
+            )
+        finally:
+            self.model.train(was_training)
+
+        elapsed = time.perf_counter() - start_time
+        rmsd_stats = summary.get("rmsd", {})
+        if isinstance(rmsd_stats, Mapping):
+            mean = rmsd_stats.get("mean")
+            median = rmsd_stats.get("median")
+            if mean is not None and median is not None:
+                self.logger.info(
+                    "Evaluation RMSD mean=%.3f Å | median=%.3f Å (%.2f s)",
+                    mean,
+                    median,
+                    elapsed,
+                )
+        else:
+            self.logger.info("Evaluation completed in %.2f s", elapsed)
+
+        wandb_metrics = self._flatten_metrics("eval", summary)
+        wandb_metrics["eval/global_step"] = self.global_step
+        wandb_metrics["eval/runtime_seconds"] = elapsed
+        wandb_metrics["eval/stage"] = stage_name
+        self._wandb_log(wandb_metrics)
+
     def run(self) -> None:
         try:
             for stage_idx, stage in enumerate(self.train_cfg.stages):
@@ -776,29 +994,31 @@ class Trainer:
                             accum_counter = 0
 
                             stage_step += 1
-                        self.global_step += 1
+                            self.global_step += 1
 
-                        if (
-                            self.train_cfg.checkpoint_interval
-                            and self.global_step % int(self.train_cfg.checkpoint_interval) == 0
-                        ):
-                            self._save_checkpoint(stage)
+                            self._run_eval_if_due(stage.name)
 
-                        if (
-                            self.train_cfg.export.enabled
-                            and self.train_cfg.export.every_n_steps
-                            and self.global_step % int(self.train_cfg.export.every_n_steps) == 0
-                        ):
-                            dataset = dataloader.dataset  # type: ignore[assignment]
-                            _export_samples(
-                                self.model,
-                                dataset,
-                                self.train_cfg.export,
-                                stage.name,
-                                self.global_step,
-                                self.output_dir,
-                                self.logger,
-                            )
+                            if (
+                                self.train_cfg.checkpoint_interval
+                                and self.global_step % int(self.train_cfg.checkpoint_interval) == 0
+                            ):
+                                self._save_checkpoint(stage)
+
+                            if (
+                                self.train_cfg.export.enabled
+                                and self.train_cfg.export.every_n_steps
+                                and self.global_step % int(self.train_cfg.export.every_n_steps) == 0
+                            ):
+                                dataset = dataloader.dataset  # type: ignore[assignment]
+                                _export_samples(
+                                    self.model,
+                                    dataset,
+                                    self.train_cfg.export,
+                                    stage.name,
+                                    self.global_step,
+                                    self.output_dir,
+                                    self.logger,
+                                )
 
                         if self.train_cfg.log_interval and stage_step % self.train_cfg.log_interval == 0:
                             now = time.perf_counter()
@@ -830,8 +1050,35 @@ class Trainer:
                 scheduler.step()
                 stage_step += 1
                 self.global_step += 1
+                self._run_eval_if_due(stage.name)
 
-            self._save_checkpoint(stage)
+                if (
+                    self.train_cfg.checkpoint_interval
+                    and self.global_step % int(self.train_cfg.checkpoint_interval) == 0
+                ):
+                    self._save_checkpoint(stage)
+
+                if (
+                    self.train_cfg.export.enabled
+                    and self.train_cfg.export.every_n_steps
+                    and self.global_step % int(self.train_cfg.export.every_n_steps) == 0
+                ):
+                    dataset = dataloader.dataset  # type: ignore[assignment]
+                    _export_samples(
+                        self.model,
+                        dataset,
+                        self.train_cfg.export,
+                        stage.name,
+                        self.global_step,
+                        self.output_dir,
+                        self.logger,
+                    )
+
+            if not (
+                self.train_cfg.checkpoint_interval
+                and self.global_step % int(self.train_cfg.checkpoint_interval) == 0
+            ):
+                self._save_checkpoint(stage)
 
             if self.train_cfg.export.enabled and self.train_cfg.export.on_stage_end:
                 dataset = dataloader.dataset  # type: ignore[assignment]

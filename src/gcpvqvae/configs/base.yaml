@@ -55,6 +55,10 @@ train:
     tags: []
     dir: null
     mode: null
+  eval:
+    interval: null              # run evaluation every N optimisation steps (null disables)
+    root: null                  # path to directory of evaluation PDB/mmCIF files
+    batch_size: 1
   export:
     enabled: true
     directory: "runs/full/exports"
