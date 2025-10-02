@@ -1,149 +1,149 @@
-fix_seed: 0
-checkpoints_every: 256
-tensorboard_log: True
-tqdm_progress_bar: False
-result_path: ./results/test
-find_unused_parameters: False
-dispatch_batches: False
-even_batches: True
-non_blocking: False
-split_batches: False
+fix_seed: 0  # Integer seed applied to NumPy and PyTorch for reproducible training runs
+checkpoints_every: 256  # Interval in epochs at which checkpoints are written to disk
+tensorboard_log: True  # Enable TensorBoard logging on the main process
+tqdm_progress_bar: False  # Show per-iteration tqdm progress bars when running locally
+result_path: ./results/test  # Root directory used to store training outputs and logs
+find_unused_parameters: False  # Forward unused parameter detection flag forwarded to DDP
+dispatch_batches: False  # Let Accelerate split batches per device instead of the dataloader
+even_batches: True  # Ensure each process receives an evenly divided batch from Accelerate
+non_blocking: False  # Toggle non-blocking device transfers in Accelerate dataloaders
+split_batches: False  # Allow Accelerate to split batches across processes automatically
 
-resume:
-  enabled: False
-  resume_path: results/dgx/vqvae/2025-07-02__01-28-28/checkpoints/epoch_8.pth
-  restart_optimizer: True
-  discard_decoder_weights: False
+resume:  # Configuration for resuming a previous training run
+  enabled: False  # Enable loading a saved checkpoint before training starts
+  resume_path: results/dgx/vqvae/2025-07-02__01-28-28/checkpoints/epoch_8.pth  # Path to the checkpoint to restore
+  restart_optimizer: True  # Reinitialize optimizer state instead of restoring it from the checkpoint
+  discard_decoder_weights: False  # Drop decoder weights when resuming to allow fresh initialization
 
-model:
-  compile_model: False
-  max_length: 512
-  decoder_output_scaling_factor: 1  # Added scaling factor for backbone prediction outputs
-  use_ndlinear: False  # Toggle for using NdLinear instead of Conv1d layers
-  encoder:
-    name: gcpnet # gcpnet
-    freeze_parameters: False
-    pretrained:
-      enabled: True
-      checkpoint_path: ./models/checkpoints/structure_denoising/gcpnet/ca_bb/last.ckpt # define your checkpoint directory here
-  vqvae:
-    vector_quantization:
-      enabled: True
-      freeze_parameters: False
-      dim: 128
-      decay: 0.99
-      codebook_size: 4096
-      commitment_weight: 0.25
-      orthogonal_reg_weight: 10
-      orthogonal_reg_max_codes: 512
-      orthogonal_reg_active_codes_only: True
-      rotation_trick: True
-      threshold_ema_dead_code: 2
-      kmeans_init: True
-      kmeans_iters: 10
-      stochastic_sample_codes: True
-      sample_codebook_temp: 0.1
-      alpha: 1.0
-    encoder:
-      freeze_parameters: False
-      dimension: 1024  # Used as dim_in and dim_out for ContinuousTransformerWrapper
-      ff_mult: 4         # Multiplier for the feedforward dimension
-      depth: 8      # Number of layers in the Encoder
-      heads: 8      # Number of attention heads in the Encoder
-      rotary_pos_emb: True
-      attn_flash: True # FA-2 if installed
-      attn_kv_heads: 2 # GQA
-      qk_norm: True
-      pre_norm: True
-      residual_attn: False # Set pre_norm to False if residual_attn is True
-      num_memory_tokens: 0 # Number of memory tokens, 0 means no memory tokens
-      causal: True # Enable causal masking for autoregressive attention
-    decoder:
-      name: geometric_decoder # geometric_decoder
-      freeze_parameters: False
+model:  # Settings controlling model construction
+  compile_model: False  # Enable torch.compile for the assembled model to speed up execution
+  max_length: 512  # Maximum input sequence length supported by the model
+  decoder_output_scaling_factor: 1  # Scale factor applied to decoder backbone coordinate predictions
+  use_ndlinear: False  # Switch encoder 1D convolutions to NdLinear layers when True
+  encoder:  # Encoder network selection
+    name: gcpnet  # Registered encoder architecture to instantiate (e.g., gcpnet)
+    freeze_parameters: False  # Prevent encoder weights from updating during training when True
+    pretrained:  # Pretrained checkpoint loading options for the encoder
+      enabled: True  # Load weights from a pretrained checkpoint before training
+      checkpoint_path: ./models/checkpoints/structure_denoising/gcpnet/ca_bb/last.ckpt  # Filesystem path to the pretrained encoder weights
+  vqvae:  # Module-specific parameters for the VQ-VAE architecture
+    vector_quantization:  # Codebook configuration
+      enabled: True  # Activate vector quantization in the bottleneck
+      freeze_parameters: False  # Stop codebook updates when True
+      dim: 128  # Dimensionality of the latent embedding vectors
+      decay: 0.99  # EMA decay used when updating codebook embeddings
+      codebook_size: 4096  # Number of entries in the codebook
+      commitment_weight: 0.25  # Weight on the codebook commitment loss term
+      orthogonal_reg_weight: 10  # Strength of orthogonality regularization between codes
+      orthogonal_reg_max_codes: 512  # Maximum number of codes sampled for orthogonality regularization
+      orthogonal_reg_active_codes_only: True  # Restrict orthogonality penalty to active codes
+      rotation_trick: True  # Apply the rotation trick to improve codebook usage
+      threshold_ema_dead_code: 2  # Minimum EMA usage count before a code is considered inactive
+      kmeans_init: True  # Initialize the codebook with K-means over initial batches
+      kmeans_iters: 10  # Iterations of K-means to run when initializing the codebook
+      stochastic_sample_codes: True  # Randomly sample codes during inference-time decoding
+      sample_codebook_temp: 0.1  # Temperature for sampling latent codes when stochastic sampling is on
+      alpha: 1.0  # Scaling factor for the EMA update of code usage statistics
+    encoder:  # Transformer encoder feeding the codebook
+      freeze_parameters: False  # Freeze the VQ encoder weights when True
+      dimension: 1024  # Hidden dimension for the transformer encoder backbone
+      ff_mult: 4  # Multiplier applied to derive the feedforward layer width
+      depth: 8  # Number of transformer blocks in the encoder
+      heads: 8  # Attention heads per multi-head attention layer
+      rotary_pos_emb: True  # Enable rotary positional encodings in attention blocks
+      attn_flash: True  # Use FlashAttention (FA-2) kernels when available
+      attn_kv_heads: 2  # Quantity of key-value heads for grouped-query attention
+      qk_norm: True  # Apply LayerNorm to query/key projections
+      pre_norm: True  # Use pre-layer normalization transformer architecture
+      residual_attn: False  # Add attention residual connections (requires disabling pre_norm when True)
+      num_memory_tokens: 0  # Count of learned memory tokens appended to the sequence
+      causal: True  # Use causal masking so tokens only attend to previous positions
+    decoder:  # Reconstruction decoder module configuration
+      name: geometric_decoder  # Registered decoder architecture key (e.g., geometric_decoder)
+      freeze_parameters: False  # Prevent decoder parameters from updating when True
 
-train_settings:
-  data_path: ../../datasets/vqvae/uniref_50/
-  num_epochs: 32
-  sample_weighting:
-    enabled: True
-    min_weight: 1.0
-    max_weight: 4.0
-    threshold_length: 384
-  shuffle: False
-  mixed_precision: bf16 # no, fp16, bf16, fp8
-  save_pdb_every: 8
-  batch_size: 16
-  num_workers: 8
-  grad_accumulation: 1
-  max_task_samples: 200000
-  profile_train_loop: False
-  cutoff_augmentation:
-    enabled: False
-    probability: 0.5
-    min_length: 25
-  nan_augmentation:
-    enabled: True
-    probability: 0.05
-    max_length: 50
-  gaussian_jitter:           # Added augmentation block
-    enabled: True           # Set True to enable Gaussian coordinate jitter
-    std: 0.05                # Standard deviation in Angstroms for N(0, std^2) noise
-    probability: 0.5         # Probability to apply jitter to a sample
-  random_rotation:           # New rotation-only augmentation (global rigid rotation)
-    enabled: True            # Applies a single random 3D rotation to all non-NaN backbone coords
+train_settings:  # Parameters that control the training loop
+  data_path: ../../datasets/vqvae/uniref_50/  # Directory containing HDF5 training data
+  num_epochs: 32  # Total number of epochs to train for
+  sample_weighting:  # Curriculum weighting on samples by sequence length
+    enabled: True  # Turn dynamic sample weighting on or off
+    min_weight: 1.0  # Minimum weight assigned to any training example
+    max_weight: 4.0  # Maximum weight a long sequence can receive
+    threshold_length: 384  # Sequence length from which weights start increasing
+  shuffle: False  # Shuffle dataset between epochs when True
+  mixed_precision: bf16  # Mixed precision policy passed to Accelerate (options: no, fp16, bf16, fp8)
+  save_pdb_every: 8  # Frequency in epochs to export predicted structures as PDB files
+  batch_size: 16  # Batch size per device before gradient accumulation
+  num_workers: 8  # Number of worker processes for the training dataloader
+  grad_accumulation: 1  # Gradient accumulation steps used to form an effective batch
+  max_task_samples: 200000  # Limit on how many samples to draw from the dataset per epoch
+  profile_train_loop: False  # Enable PyTorch profiler around the training loop when debugging
+  cutoff_augmentation:  # Randomly truncate sequences to shorter lengths
+    enabled: False  # Activate cutoff augmentation when True
+    probability: 0.5  # Chance of applying the cutoff to any given sample
+    min_length: 25  # Minimum length retained after cutoff augmentation
+  nan_augmentation:  # Randomly mask backbone coordinates with NaNs
+    enabled: True  # Toggle NaN augmentation on or off
+    probability: 0.05  # Fraction of residues to corrupt with NaNs
+    max_length: 50  # Maximum contiguous residues replaced with NaNs
+  gaussian_jitter:  # Gaussian noise augmentation applied to atomic coordinates
+    enabled: True  # Set True to enable Gaussian coordinate jitter
+    std: 0.05  # Standard deviation in Angstroms for N(0, std^2) noise
+    probability: 0.5  # Probability to apply jitter to a sample
+  random_rotation:  # Global rigid rotation augmentation for backbones
+    enabled: True  # Applies a single random 3D rotation to all non-NaN backbone coords
   gradient_norm_logging_freq: 50  # How often to calculate and log gradient norm (in steps)
   log_separate_grad_norms: True  # Log gradient norms for each loss separately (disable when using model compilation)
-  adaptive_loss_coefficient: True  # will enable only when log_separate_grad_norms is True
-  losses:
-    alignment_strategy: kabsch # kabsch, no
+  adaptive_loss_coefficient: True  # Enable automatic loss reweighting (requires log_separate_grad_norms to be True)
+  losses:  # Individual loss term configuration
+    alignment_strategy: kabsch  # Alignment procedure applied before computing structural metrics (options: kabsch, no)
     mse:
-      enabled: True
-      weight: 0.001
-      adaptive_coefficient: True
+      enabled: True  # Include mean squared error on coordinates in the total loss
+      weight: 0.001  # Scalar applied to the MSE component
+      adaptive_coefficient: True  # Allow automatic adjustment of the MSE weight
     backbone_distance:
-      enabled: True
-      weight: 0.01
-      adaptive_coefficient: True
+      enabled: True  # Include backbone pairwise distance loss
+      weight: 0.01  # Scale for backbone distance term
+      adaptive_coefficient: True  # Let adaptive weighting tune the distance loss scale
     backbone_direction:
-      enabled: True
-      weight: 0.05
-      adaptive_coefficient: True
+      enabled: True  # Include backbone directional vector supervision
+      weight: 0.05  # Scale for backbone direction term
+      adaptive_coefficient: True  # Allow dynamic rescaling of the direction loss
     binned_distance_classification:
-      enabled: False
-      weight: 0.01
-      adaptive_coefficient: True
+      enabled: False  # Enable discrete distance bin classification objective
+      weight: 0.01  # Coefficient on the distance classification loss
+      adaptive_coefficient: True  # Permit adaptive adjustment of the classification weight
     binned_direction_classification:
-      enabled: False
-      weight: 0.01
-      adaptive_coefficient: True
+      enabled: False  # Enable discrete direction bin classification objective
+      weight: 0.01  # Coefficient on the direction classification loss
+      adaptive_coefficient: True  # Permit adaptive adjustment of the classification weight
     next_token_prediction:
-      enabled: True
-      weight: 0.001
-      adaptive_coefficient: True
+      enabled: True  # Train an autoregressive next-token head alongside reconstruction
+      weight: 0.001  # Loss weight for the next-token prediction term
+      adaptive_coefficient: True  # Allow automatic tuning of the next-token loss weight
       blocks: 0  # Number of transformer blocks, 0 means a linear layer only
     vq:
-      adaptive_coefficient: True
+      adaptive_coefficient: True  # Learn scaling for the vector quantization loss component
 
-valid_settings:
-  data_path: ../../datasets/vqvae/whole_validation_2048_h5/
-  do_every: 1
-  save_pdb_every: 1
-  batch_size: 8
-  num_workers: 0
+valid_settings:  # Parameters for validation data loading and evaluation
+  data_path: ../../datasets/vqvae/whole_validation_2048_h5/  # Directory containing validation HDF5 files
+  do_every: 1  # Run validation once every N training epochs
+  save_pdb_every: 1  # Dump validation reconstructions as PDB files at this epoch interval
+  batch_size: 8  # Validation batch size per device
+  num_workers: 0  # Number of worker processes for the validation dataloader
 
-optimizer:
-  name: adam
-  lr: 1e-4
-  weight_decouple: True
-  weight_decay: 1e-2
-  eps: 1e-7
-  beta_1: 0.9
-  beta_2: 0.98
-  use_8bit_adam: True
-  grad_clip_norm: 1.0
-  decay:
-    warmup: 4096
-    min_lr: 1e-6
-    gamma: 0.2
-    num_restarts: 1
+optimizer:  # Optimizer and scheduler hyperparameters
+  name: adam  # Optimizer class to instantiate
+  lr: 1e-4  # Initial learning rate for the optimizer
+  weight_decouple: True  # Use decoupled weight decay (AdamW-style) when supported
+  weight_decay: 1e-2  # L2 regularization strength applied through the optimizer
+  eps: 1e-7  # Numerical stability epsilon added to Adam denominators
+  beta_1: 0.9  # Exponential decay for the first moment estimates
+  beta_2: 0.98  # Exponential decay for the second moment estimates
+  use_8bit_adam: True  # Leverage bitsandbytes 8-bit Adam optimizer if available
+  grad_clip_norm: 1.0  # Maximum gradient norm for clipping before optimizer step
+  decay:  # Learning rate scheduler configuration
+    warmup: 4096  # Number of warmup steps before cosine decay begins
+    min_lr: 1e-6  # Floor learning rate reached at the end of decay cycles
+    gamma: 0.2  # Multiplicative factor applied at each cosine restart
+    num_restarts: 1  # Number of cosine annealing restarts during training

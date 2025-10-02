@@ -1,9 +1,9 @@
-trained_model_dir: "path/to/trained_model"  # Directory where the trained model is saved
-checkpoint_path: "checkpoints/best_valid.pth"
-config_vqvae: "config_vqvae.yaml"
-config_encoder: "config_gcpnet_encoder.yaml"
-config_decoder: "config_geometric_decoder.yaml"
+trained_model_dir: "path/to/trained_model"  # Directory containing the trained model assets
+checkpoint_path: "checkpoints/best_valid.pth"  # Checkpoint file to restore before extraction
+config_vqvae: "config_vqvae.yaml"  # Path to the VQ-VAE training configuration
+config_encoder: "config_gcpnet_encoder.yaml"  # Encoder configuration to rebuild the model
+config_decoder: "config_geometric_decoder.yaml"  # Decoder configuration to rebuild the model
 
-output_base_dir: "inference_codebook_extraction_results"
+output_base_dir: "inference_codebook_extraction_results"  # Directory for generated extraction artifacts
 
-codebook_h5_filename: "codebook_embeddings.h5"
+codebook_h5_filename: "codebook_embeddings.h5"  # HDF5 file name for exported codebook embeddings
