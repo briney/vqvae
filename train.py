@@ -3,6 +3,8 @@ import numpy as np
 import yaml
 import os
 import torch
+from collections.abc import Mapping
+from numbers import Number
 from utils.custom_losses import calculate_decoder_loss, log_per_loss_grad_norms
 from utils.utils import (
     save_backbone_pdb,
@@ -39,6 +41,72 @@ from utils.training_helpers import (
 )
 
 
+def _extract_interval_value(interval_config, key):
+    if interval_config is None:
+        return None
+    if isinstance(interval_config, Mapping):
+        return interval_config.get(key)
+    if hasattr(interval_config, key):
+        return getattr(interval_config, key)
+    return None
+
+
+def parse_interval(interval_config):
+    """Return the active interval definition.
+
+    Args:
+        interval_config: Configuration entry which may be an int/float, mapping, or
+            object exposing ``steps``/``epochs`` attributes.
+
+    Returns:
+        tuple[str | None, int | None]: (mode, value) where mode is ``"steps"`` or
+        ``"epochs"`` when configured. ``value`` is ``None`` when no valid interval is
+        provided.
+    """
+
+    if interval_config is None:
+        return None, None
+
+    if isinstance(interval_config, Number):
+        value = int(interval_config)
+        return ("epochs", value) if value > 0 else (None, None)
+
+    steps = _extract_interval_value(interval_config, "steps")
+    epochs = _extract_interval_value(interval_config, "epochs")
+
+    if steps is not None:
+        steps = int(steps)
+        if steps > 0:
+            return "steps", steps
+
+    if epochs is not None:
+        epochs = int(epochs)
+        if epochs > 0:
+            return "epochs", epochs
+
+    return None, None
+
+
+def should_trigger_interval(interval_config, *, epoch=None, step=None):
+    """Determine whether an interval-triggered event should execute."""
+
+    mode, value = parse_interval(interval_config)
+    if value is None:
+        return False, mode
+
+    if mode == "steps":
+        if step is None:
+            return False, mode
+        return step > 0 and step % value == 0, mode
+
+    if mode == "epochs":
+        if epoch is None:
+            return False, mode
+        return epoch > 0 and epoch % value == 0, mode
+
+    return False, mode
+
+
 def train_loop(net, train_loader, epoch, adaptive_loss_coeffs, **kwargs):
     accelerator = kwargs.pop('accelerator')
     optimizer = kwargs.pop('optimizer')
@@ -51,6 +119,7 @@ def train_loop(net, train_loader, epoch, adaptive_loss_coeffs, **kwargs):
     codebook_size = configs.model.vqvae.vector_quantization.codebook_size
     accum_iter = configs.train_settings.grad_accumulation
     alignment_strategy = configs.train_settings.losses.alignment_strategy
+    train_save_mode, train_save_value = parse_interval(configs.train_settings.save_pdb_every)
 
     # Initialize metrics and accumulators
     metrics = init_metrics(configs, accelerator)
@@ -102,7 +171,14 @@ def train_loop(net, train_loader, epoch, adaptive_loss_coeffs, **kwargs):
             )
 
 
-            if accelerator.is_main_process and epoch % configs.train_settings.save_pdb_every == 0 and epoch != 0 and i == 0:
+            if (
+                accelerator.is_main_process
+                and train_save_mode == 'epochs'
+                and train_save_value is not None
+                and epoch % train_save_value == 0
+                and epoch != 0
+                and i == 0
+            ):
                 logging.info(f"Building PDB files for training data in epoch {epoch}")
                 save_backbone_pdb(trans_pred_coords.detach(), masks, data['pid'],
                                   os.path.join(kwargs['result_path'], 'pdb_files',
@@ -134,6 +210,35 @@ def train_loop(net, train_loader, epoch, adaptive_loss_coeffs, **kwargs):
 
                 progress_bar.update(1)
                 global_step += 1
+
+                if (
+                    accelerator.is_main_process
+                    and train_save_mode == 'steps'
+                    and train_save_value is not None
+                    and global_step % train_save_value == 0
+                ):
+                    logging.info(f"Building PDB files for training data at step {global_step}")
+                    save_backbone_pdb(
+                        trans_pred_coords.detach(),
+                        masks,
+                        data['pid'],
+                        os.path.join(
+                            kwargs['result_path'],
+                            'pdb_files',
+                            f'train_outputs_step_{global_step}',
+                        ),
+                    )
+                    save_backbone_pdb(
+                        trans_true_coords.detach().squeeze(),
+                        masks,
+                        data['pid'],
+                        os.path.join(
+                            kwargs['result_path'],
+                            'pdb_files',
+                            f'train_labels_step_{global_step}',
+                        ),
+                    )
+                    logging.info("PDB files are built")
 
                 finalize_step(acc)
 
@@ -197,6 +302,7 @@ def valid_loop(net, valid_loader, epoch, **kwargs):
     logging = kwargs.pop('logging')
     codebook_size = configs.model.vqvae.vector_quantization.codebook_size
     alignment_strategy = configs.train_settings.losses.alignment_strategy
+    valid_save_mode, valid_save_value = parse_interval(configs.valid_settings.save_pdb_every)
 
     # Initialize metrics and accumulators for validation
     metrics = init_metrics(configs, accelerator)
@@ -210,6 +316,7 @@ def valid_loop(net, valid_loader, epoch, **kwargs):
     progress_bar.set_description(f"Validation epoch {epoch}")
 
     net.eval()
+    valid_step = 0
     for i, data in enumerate(valid_loader):
         with torch.inference_mode():
             masks = torch.logical_and(data['masks'], data['nan_masks'])
@@ -227,7 +334,14 @@ def valid_loop(net, valid_loader, epoch, **kwargs):
                 adaptive_loss_coeffs=None,
             )
 
-            if accelerator.is_main_process and epoch % configs.valid_settings.save_pdb_every == 0 and epoch != 0 and i == 0:
+            if (
+                accelerator.is_main_process
+                and valid_save_mode == 'epochs'
+                and valid_save_value is not None
+                and epoch % valid_save_value == 0
+                and epoch != 0
+                and i == 0
+            ):
                 logging.info(f"Building PDB files for validation data in epoch {epoch}")
                 save_backbone_pdb(trans_pred_coords.detach(), masks, data['pid'],
                                   os.path.join(kwargs['result_path'], 'pdb_files',
@@ -243,6 +357,35 @@ def valid_loop(net, valid_loader, epoch, **kwargs):
             finalize_step(acc)
 
         progress_bar.update(1)
+        valid_step += 1
+        if (
+            accelerator.is_main_process
+            and valid_save_mode == 'steps'
+            and valid_save_value is not None
+            and valid_step % valid_save_value == 0
+        ):
+            logging.info(f"Building PDB files for validation data at step {valid_step}")
+            save_backbone_pdb(
+                trans_pred_coords.detach(),
+                masks,
+                data['pid'],
+                os.path.join(
+                    kwargs['result_path'],
+                    'pdb_files',
+                    f'valid_outputs_step_{valid_step}',
+                ),
+            )
+            save_backbone_pdb(
+                trans_true_coords.detach(),
+                masks,
+                data['pid'],
+                os.path.join(
+                    kwargs['result_path'],
+                    'pdb_files',
+                    f'valid_labels_step_{valid_step}',
+                ),
+            )
+            logging.info("PDB files are built")
         avgs = average_losses(acc)
         progress_bar.set_description(f"validation epoch {epoch} "
                                      + f"[loss: {avgs['avg_unscaled_step_loss']:.3f}, "
@@ -292,6 +435,11 @@ def main(dict_config, config_file_path):
         torch.manual_seed(configs.fix_seed)
         torch.random.manual_seed(configs.fix_seed)
         np.random.seed(configs.fix_seed)
+
+    checkpoint_interval = getattr(configs, 'checkpoints_every', None)
+    log_interval = getattr(configs, 'log_every', None)
+    _, log_value = parse_interval(log_interval)
+    eval_interval = configs.valid_settings.do_every
 
     # Set find_unused_parameters to True
     ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=configs.find_unused_parameters)
@@ -421,25 +569,32 @@ def main(dict_config, config_file_path):
 
         end_time = time.time()
         training_time = end_time - start_time
-        logging.info(
-            f'epoch {epoch} ({training_loop_reports["counter"]} steps) - time {np.round(training_time, 2)}s, '
-            f'global steps {training_loop_reports["global_step"]}, loss {training_loop_reports["loss"]:.4f}, '
-            f'rec loss {training_loop_reports["rec_loss"]:.4f}, '
-            f'mae {training_loop_reports["mae"]:.4f}, '
-            f'rmsd {training_loop_reports["rmsd"]:.4f}, '
-            f'gdtts {training_loop_reports["gdtts"]:.4f}, '
-            f'tm_score {training_loop_reports["tm_score"]:.4f}, '
-            f'ntp loss {training_loop_reports["ntp_loss"]:.4f}, '
-            f'perplexity {training_loop_reports.get("perplexity", float("nan")):.2f}, '
-            f'vq loss {training_loop_reports["vq_loss"]:.4f}, '
-            f'activation {training_loop_reports["activation"]:.1f}')
+        should_log, _ = should_trigger_interval(
+            log_interval, epoch=epoch, step=training_loop_reports["global_step"]
+        )
+        if should_log or log_value is None:
+            logging.info(
+                f'epoch {epoch} ({training_loop_reports["counter"]} steps) - time {np.round(training_time, 2)}s, '
+                f'global steps {training_loop_reports["global_step"]}, loss {training_loop_reports["loss"]:.4f}, '
+                f'rec loss {training_loop_reports["rec_loss"]:.4f}, '
+                f'mae {training_loop_reports["mae"]:.4f}, '
+                f'rmsd {training_loop_reports["rmsd"]:.4f}, '
+                f'gdtts {training_loop_reports["gdtts"]:.4f}, '
+                f'tm_score {training_loop_reports["tm_score"]:.4f}, '
+                f'ntp loss {training_loop_reports["ntp_loss"]:.4f}, '
+                f'perplexity {training_loop_reports.get("perplexity", float("nan")):.2f}, '
+                f'vq loss {training_loop_reports["vq_loss"]:.4f}, '
+                f'activation {training_loop_reports["activation"]:.1f}')
 
         global_step = training_loop_reports["global_step"]
         # Update adaptive coefficients from training loop
         adaptive_loss_coeffs = training_loop_reports.get("adaptive_loss_coeffs", adaptive_loss_coeffs)
         accelerator.wait_for_everyone()
 
-        if epoch % configs.checkpoints_every == 0:
+        should_checkpoint, _ = should_trigger_interval(
+            checkpoint_interval, epoch=epoch, step=global_step
+        )
+        if should_checkpoint:
             tools = dict()
             tools['net'] = net
             tools['optimizer'] = optimizer
@@ -454,7 +609,10 @@ def main(dict_config, config_file_path):
                                 configs=configs)
                 logging.info(f'\tcheckpoint models in {model_path}')
 
-        if epoch % configs.valid_settings.do_every == 0:
+        should_run_eval, _ = should_trigger_interval(
+            eval_interval, epoch=epoch, step=global_step
+        )
+        if should_run_eval:
             start_time = time.time()
             valid_loop_reports = valid_loop(net, valid_dataloader, epoch,
                                             accelerator=accelerator,
@@ -465,20 +623,24 @@ def main(dict_config, config_file_path):
             end_time = time.time()
             valid_time = end_time - start_time
             accelerator.wait_for_everyone()
-            logging.info(
-                f'validation epoch {epoch} ({valid_loop_reports["counter"]} steps) - time {np.round(valid_time, 2)}s, '
-                f'loss {valid_loop_reports["loss"]:.4f}, '
-                f'rec loss {valid_loop_reports["rec_loss"]:.4f}, '
-                f'mae {valid_loop_reports["mae"]:.4f}, '
-                f'rmsd {valid_loop_reports["rmsd"]:.4f}, '
-                f'gdtts {valid_loop_reports["gdtts"]:.4f}, '
-                f'tm_score {valid_loop_reports["tm_score"]:.4f}, '
-                f'ntp loss {valid_loop_reports["ntp_loss"]:.4f}, '
-                f'perplexity {valid_loop_reports.get("perplexity", float("nan")):.2f}, '
-                f'vq loss {valid_loop_reports["vq_loss"]:.4f}, '
-                f'activation {valid_loop_reports["activation"]:.1f}'
-                # f'lddt {valid_loop_reports["lddt"]:.4f}'
+            eval_log, _ = should_trigger_interval(
+                log_interval, epoch=epoch, step=global_step
             )
+            if eval_log or log_value is None:
+                logging.info(
+                    f'validation epoch {epoch} ({valid_loop_reports["counter"]} steps) - time {np.round(valid_time, 2)}s, '
+                    f'loss {valid_loop_reports["loss"]:.4f}, '
+                    f'rec loss {valid_loop_reports["rec_loss"]:.4f}, '
+                    f'mae {valid_loop_reports["mae"]:.4f}, '
+                    f'rmsd {valid_loop_reports["rmsd"]:.4f}, '
+                    f'gdtts {valid_loop_reports["gdtts"]:.4f}, '
+                    f'tm_score {valid_loop_reports["tm_score"]:.4f}, '
+                    f'ntp loss {valid_loop_reports["ntp_loss"]:.4f}, '
+                    f'perplexity {valid_loop_reports.get("perplexity", float("nan")):.2f}, '
+                    f'vq loss {valid_loop_reports["vq_loss"]:.4f}, '
+                    f'activation {valid_loop_reports["activation"]:.1f}'
+                    # f'lddt {valid_loop_reports["lddt"]:.4f}'
+                )
 
             # Check valid metric to save the best model
             if valid_loop_reports["rmsd"] < best_valid_metrics['rmsd']:
