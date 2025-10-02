@@ -1,5 +1,10 @@
 fix_seed: 0  # Integer seed applied to NumPy and PyTorch for reproducible training runs
-checkpoints_every: 256  # Interval in epochs at which checkpoints are written to disk
+checkpoints_every:
+  steps: null  # Interval in optimizer steps for writing checkpoints (overrides epochs when set)
+  epochs: 256  # Interval in epochs at which checkpoints are written to disk
+log_every:
+  steps: null  # Interval in optimizer steps for aggregated training logs (overrides epochs when set)
+  epochs: 1  # Interval in epochs for aggregated training logs when step interval is not provided
 tensorboard_log: True  # Enable TensorBoard logging on the main process
 tqdm_progress_bar: False  # Show per-iteration tqdm progress bars when running locally
 result_path: ./results/test  # Root directory used to store training outputs and logs
@@ -72,7 +77,9 @@ train_settings:  # Parameters that control the training loop
     threshold_length: 384  # Sequence length from which weights start increasing
   shuffle: False  # Shuffle dataset between epochs when True
   mixed_precision: bf16  # Mixed precision policy passed to Accelerate (options: no, fp16, bf16, fp8)
-  save_pdb_every: 8  # Frequency in epochs to export predicted structures as PDB files
+  save_pdb_every:
+    steps: null  # Frequency in optimizer steps to export predicted structures (overrides epochs when set)
+    epochs: 8  # Frequency in epochs to export predicted structures as PDB files
   batch_size: 16  # Batch size per device before gradient accumulation
   num_workers: 8  # Number of worker processes for the training dataloader
   grad_accumulation: 1  # Gradient accumulation steps used to form an effective batch
@@ -127,8 +134,12 @@ train_settings:  # Parameters that control the training loop
 
 valid_settings:  # Parameters for validation data loading and evaluation
   data_path: ../../datasets/vqvae/whole_validation_2048_h5/  # Directory containing validation HDF5 files
-  do_every: 1  # Run validation once every N training epochs
-  save_pdb_every: 1  # Dump validation reconstructions as PDB files at this epoch interval
+  do_every:
+    steps: null  # Run validation once every N optimizer steps when provided
+    epochs: 1  # Run validation once every N training epochs when steps is null
+  save_pdb_every:
+    steps: null  # Dump validation reconstructions every N validation steps when provided
+    epochs: 1  # Dump validation reconstructions as PDB files at this epoch interval
   batch_size: 8  # Validation batch size per device
   num_workers: 0  # Number of worker processes for the validation dataloader
 
