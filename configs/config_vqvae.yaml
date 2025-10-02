@@ -2,9 +2,27 @@ fix_seed: 0  # Integer seed applied to NumPy and PyTorch for reproducible traini
 checkpoints_every:
   steps: null  # Interval in optimizer steps for writing checkpoints (overrides epochs when set)
   epochs: 256  # Interval in epochs at which checkpoints are written to disk
-log_every:
-  steps: null  # Interval in optimizer steps for aggregated training logs (overrides epochs when set)
-  epochs: 1  # Interval in epochs for aggregated training logs when step interval is not provided
+log:
+  interval:
+    steps: null  # Interval in optimizer steps for aggregated logs (overrides epochs when set)
+    epochs: 1  # Interval in epochs for aggregated logs when step interval is not provided
+  wandb:
+    enabled: False  # Enable logging scalars to Weights & Biases when True
+    project: null  # WandB project name
+    run_name: null  # Optional display name for the run
+    entity: null  # WandB entity/organization
+    group: null  # Logical experiment group for the run
+    job_type: null  # Job type label reported to WandB
+    tags: []  # List of tags attached to the run for filtering
+    notes: null  # Free-form notes stored with the run
+    dir: null  # Directory used by WandB to store run artifacts (defaults to result_path when null)
+    mode: online  # WandB init mode (online, offline, disabled)
+    resume: null  # Resume behavior passed to wandb.init (e.g., allow, must, never)
+    id: null  # Explicit run ID used when resuming
+    config: {}  # Extra key/value pairs forwarded to wandb.init(config=...)
+    watch:
+      log: null  # Optional wandb.watch log mode (e.g., gradients)
+      log_freq: null  # Logging frequency for wandb.watch when enabled
 tensorboard_log: True  # Enable TensorBoard logging on the main process
 tqdm_progress_bar: False  # Show per-iteration tqdm progress bars when running locally
 result_path: ./results/test  # Root directory used to store training outputs and logs

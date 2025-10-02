@@ -5,6 +5,7 @@ import os
 import torch
 from collections.abc import Mapping
 from numbers import Number
+from typing import Any, Dict, Optional
 from utils.custom_losses import calculate_decoder_loss, log_per_loss_grad_norms
 from utils.utils import (
     save_backbone_pdb,
@@ -39,6 +40,101 @@ from utils.training_helpers import (
     progress_postfix,
     log_tensorboard_epoch,
 )
+
+
+def _init_wandb_run(configs, raw_config: Dict[str, Any], result_path: Optional[str], *, logging):
+    log_config = getattr(configs, 'log', None)
+    wandb_config = getattr(log_config, 'wandb', None) if log_config is not None else None
+    if not wandb_config or not getattr(wandb_config, 'enabled', False):
+        return None, None
+
+    project = getattr(wandb_config, 'project', None)
+    if project is None:
+        logging.warning('WandB logging enabled but no project specified; falling back to default project name.')
+
+    import wandb  # Imported lazily to avoid dependency when logging is disabled
+
+    init_kwargs: Dict[str, Any] = {}
+    if project is not None:
+        init_kwargs['project'] = project
+
+    name = getattr(wandb_config, 'run_name', None)
+    if name is not None:
+        init_kwargs['name'] = name
+
+    entity = getattr(wandb_config, 'entity', None)
+    if entity is not None:
+        init_kwargs['entity'] = entity
+
+    group = getattr(wandb_config, 'group', None)
+    if group is not None:
+        init_kwargs['group'] = group
+
+    job_type = getattr(wandb_config, 'job_type', None)
+    if job_type is not None:
+        init_kwargs['job_type'] = job_type
+
+    notes = getattr(wandb_config, 'notes', None)
+    if notes is not None:
+        init_kwargs['notes'] = notes
+
+    tags = getattr(wandb_config, 'tags', None)
+    if tags:
+        init_kwargs['tags'] = list(tags)
+
+    run_id = getattr(wandb_config, 'id', None)
+    if run_id is not None:
+        init_kwargs['id'] = run_id
+
+    resume = getattr(wandb_config, 'resume', None)
+    if resume is not None:
+        init_kwargs['resume'] = resume
+
+    mode = getattr(wandb_config, 'mode', None)
+    if mode is not None:
+        init_kwargs['mode'] = mode
+
+    wandb_dir = getattr(wandb_config, 'dir', None)
+    if wandb_dir is None and result_path is not None:
+        init_kwargs['dir'] = result_path
+    elif wandb_dir is not None:
+        init_kwargs['dir'] = wandb_dir
+
+    extra_config = getattr(wandb_config, 'config', None)
+    config_payload: Dict[str, Any] = {}
+    if isinstance(extra_config, Mapping):
+        config_payload.update(dict(extra_config))
+    config_payload.setdefault('config_file', getattr(configs, 'config_path', None))
+    config_payload.update(raw_config)
+
+    init_kwargs['config'] = config_payload
+
+    run = wandb.init(**init_kwargs)
+    return run, wandb_config
+
+
+def _format_loss_name(name: str) -> str:
+    return name[:-5] if name.endswith('_loss') else name
+
+
+def _log_step_losses_to_wandb(loss_dict: Dict[str, torch.Tensor], phase: str, *, step: int, wandb_run) -> None:
+    if wandb_run is None:
+        return
+
+    log_payload: Dict[str, float] = {}
+    for key, value in loss_dict.items():
+        if not torch.is_tensor(value) or value.numel() != 1:
+            continue
+        scalar = float(value.detach().item())
+        if key.startswith('unscaled_'):
+            base = _format_loss_name(key[len('unscaled_'):])
+            log_payload[f'{phase}/unscaled_step_loss/{base}'] = scalar
+        elif key.endswith('_loss'):
+            base = _format_loss_name(key)
+            log_payload[f'{phase}/step_loss/{base}'] = scalar
+
+    if log_payload:
+        wandb_run.log(log_payload, step=step)
 
 
 def _extract_interval_value(interval_config, key):
@@ -116,6 +212,7 @@ def train_loop(net, train_loader, epoch, adaptive_loss_coeffs, **kwargs):
     logging = kwargs.pop('logging')
     profiler = kwargs.pop('profiler')
     profile_train_loop = kwargs.pop('profile_train_loop')
+    wandb_run = kwargs.pop('wandb_run', None)
     max_steps = kwargs.pop('max_steps', None)
     codebook_size = configs.model.vqvae.vector_quantization.codebook_size
     accum_iter = configs.train_settings.grad_accumulation
@@ -169,7 +266,7 @@ def train_loop(net, train_loader, epoch, adaptive_loss_coeffs, **kwargs):
             # Log per-loss gradient norms and adjust adaptive coefficients
             adaptive_loss_coeffs = log_per_loss_grad_norms(
                 loss_dict, net, configs, writer, accelerator,
-                global_step, adaptive_loss_coeffs
+                global_step, adaptive_loss_coeffs, wandb_run=wandb_run
             )
 
 
@@ -201,8 +298,11 @@ def train_loop(net, train_loader, epoch, adaptive_loss_coeffs, **kwargs):
                     grad_norm = torch.norm(
                         torch.stack([torch.norm(p.grad.detach(), 2) for p in net.parameters() if p.grad is not None and p.requires_grad]),
                         2)
-                    if accelerator.is_main_process and configs.tensorboard_log:
-                        writer.add_scalar('gradient norm/total_amp_scaled', grad_norm.item(), global_step)
+                    if accelerator.is_main_process:
+                        if configs.tensorboard_log:
+                            writer.add_scalar('gradient norm/total_amp_scaled', grad_norm.item(), global_step)
+                        if wandb_run is not None:
+                            wandb_run.log({'train/gradient_norm/total_amp_scaled': grad_norm.item()}, step=global_step)
 
                 # Accelerate Gradient clipping: unscale the gradients (only when using FP16 AMP) and then apply clipping
                 accelerator.clip_grad_norm_(net.parameters(), configs.optimizer.grad_clip_norm)
@@ -216,6 +316,10 @@ def train_loop(net, train_loader, epoch, adaptive_loss_coeffs, **kwargs):
                 if max_steps is not None and global_step >= max_steps:
                     reached_max_steps = True
                     break
+
+                if accelerator.is_main_process and wandb_run is not None:
+                    _log_step_losses_to_wandb(loss_dict, 'train', step=global_step, wandb_run=wandb_run)
+                    wandb_run.log({'train/lr': optimizer.param_groups[0]['lr']}, step=global_step)
 
                 if (
                     accelerator.is_main_process
@@ -282,6 +386,32 @@ def train_loop(net, train_loader, epoch, adaptive_loss_coeffs, **kwargs):
             include_ntp=include_ntp,
         )
 
+    if accelerator.is_main_process and wandb_run is not None:
+        payload: Dict[str, float] = {
+            'train/loss/total': avgs['avg_step_loss'],
+            'train/loss/rec': avgs['avg_rec_loss'],
+            'train/loss/vq': avgs['avg_vq_loss'],
+            'train/metric/mae': metrics_values['mae'],
+            'train/metric/rmsd': metrics_values['rmsd'],
+            'train/metric/gdtts': metrics_values['gdtts'],
+            'train/metric/tm_score': metrics_values['tm_score'],
+            'train/metric/activation_percent': np.round(avg_activation * 100, 1),
+        }
+        if 'avg_ntp_loss' in avgs:
+            payload['train/loss/ntp'] = avgs['avg_ntp_loss']
+        if 'avg_unscaled_step_loss' in avgs:
+            payload['train/unscaled_loss/total'] = avgs['avg_unscaled_step_loss']
+        if 'avg_unscaled_rec_loss' in avgs:
+            payload['train/unscaled_loss/rec'] = avgs['avg_unscaled_rec_loss']
+        if 'avg_unscaled_vq_loss' in avgs:
+            payload['train/unscaled_loss/vq'] = avgs['avg_unscaled_vq_loss']
+        if 'avg_unscaled_ntp_loss' in avgs:
+            payload['train/unscaled_loss/ntp'] = avgs['avg_unscaled_ntp_loss']
+        perplexity = metrics_values.get('perplexity', float('nan'))
+        if perplexity == perplexity:
+            payload['train/metric/perplexity'] = perplexity
+        wandb_run.log(payload, step=global_step)
+
     # Reset the metrics for the next epoch
     reset_metrics(metrics)
 
@@ -313,6 +443,8 @@ def valid_loop(net, valid_loader, epoch, **kwargs):
     codebook_size = configs.model.vqvae.vector_quantization.codebook_size
     alignment_strategy = configs.train_settings.losses.alignment_strategy
     valid_save_mode, valid_save_value = parse_interval(configs.valid_settings.save_pdb_every)
+    wandb_run = kwargs.pop('wandb_run', None)
+    global_step = kwargs.get('global_step', None)
 
     # Initialize metrics and accumulators for validation
     metrics = init_metrics(configs, accelerator)
@@ -420,6 +552,32 @@ def valid_loop(net, valid_loader, epoch, **kwargs):
             include_ntp=include_ntp,
         )
 
+    if accelerator.is_main_process and wandb_run is not None:
+        payload: Dict[str, float] = {
+            'eval/loss/total': avgs['avg_step_loss'],
+            'eval/loss/rec': avgs['avg_rec_loss'],
+            'eval/loss/vq': avgs['avg_vq_loss'],
+            'eval/metric/mae': metrics_values['mae'],
+            'eval/metric/rmsd': metrics_values['rmsd'],
+            'eval/metric/gdtts': metrics_values['gdtts'],
+            'eval/metric/tm_score': metrics_values['tm_score'],
+            'eval/metric/activation_percent': np.round(avg_activation * 100, 1),
+        }
+        if 'avg_ntp_loss' in avgs:
+            payload['eval/loss/ntp'] = avgs['avg_ntp_loss']
+        if 'avg_unscaled_step_loss' in avgs:
+            payload['eval/unscaled_loss/total'] = avgs['avg_unscaled_step_loss']
+        if 'avg_unscaled_rec_loss' in avgs:
+            payload['eval/unscaled_loss/rec'] = avgs['avg_unscaled_rec_loss']
+        if 'avg_unscaled_vq_loss' in avgs:
+            payload['eval/unscaled_loss/vq'] = avgs['avg_unscaled_vq_loss']
+        if 'avg_unscaled_ntp_loss' in avgs:
+            payload['eval/unscaled_loss/ntp'] = avgs['avg_unscaled_ntp_loss']
+        perplexity = metrics_values.get('perplexity', float('nan'))
+        if perplexity == perplexity:
+            payload['eval/metric/perplexity'] = perplexity
+        wandb_run.log(payload, step=global_step if global_step is not None else epoch)
+
     # Reset metrics for the next epoch
     reset_metrics(metrics)
 
@@ -447,7 +605,8 @@ def main(dict_config, config_file_path):
         np.random.seed(configs.fix_seed)
 
     checkpoint_interval = getattr(configs, 'checkpoints_every', None)
-    log_interval = getattr(configs, 'log_every', None)
+    log_config = getattr(configs, 'log', None)
+    log_interval = getattr(log_config, 'interval', None) if log_config is not None else getattr(configs, 'log_every', None)
     _, log_value = parse_interval(log_interval)
     eval_interval = configs.valid_settings.do_every
 
@@ -490,6 +649,12 @@ def main(dict_config, config_file_path):
 
     logging = get_logging(result_path, configs)
 
+    wandb_run = None
+    wandb_settings = getattr(log_config, 'wandb', None) if log_config is not None else None
+    if accelerator.is_main_process:
+        wandb_run, wandb_settings = _init_wandb_run(configs, dict_config, result_path, logging=logging)
+    accelerator.wait_for_everyone()
+
     train_dataloader, valid_dataloader = prepare_gcpnet_vqvae_dataloaders(
         logging, accelerator, configs, encoder_configs=encoder_configs, decoder_configs=decoder_configs
     )
@@ -517,6 +682,18 @@ def main(dict_config, config_file_path):
     net, optimizer, train_dataloader, valid_dataloader, scheduler = accelerator.prepare(
         net, optimizer, train_dataloader, valid_dataloader, scheduler
     )
+
+    if accelerator.is_main_process and wandb_run is not None and wandb_settings is not None:
+        watch_config = getattr(wandb_settings, 'watch', None)
+        if watch_config is not None:
+            watch_log = getattr(watch_config, 'log', None)
+            if watch_log:
+                watch_kwargs: Dict[str, Any] = {'log': watch_log}
+                log_freq = getattr(watch_config, 'log_freq', None)
+                if log_freq is not None:
+                    watch_kwargs['log_freq'] = int(log_freq)
+                import wandb
+                wandb.watch(accelerator.unwrap_model(net), **watch_kwargs)
 
     net.to(accelerator.device)
 
@@ -588,7 +765,8 @@ def main(dict_config, config_file_path):
                                            logging=logging, global_step=global_step,
                                            writer=train_writer, result_path=result_path,
                                            profiler=prof, profile_train_loop=profile_train_loop,
-                                           max_steps=max_steps)
+                                           max_steps=max_steps,
+                                           wandb_run=wandb_run if accelerator.is_main_process else None)
 
         if profile_train_loop:
             prof.stop()
@@ -613,6 +791,16 @@ def main(dict_config, config_file_path):
                 f'perplexity {training_loop_reports.get("perplexity", float("nan")):.2f}, '
                 f'vq loss {training_loop_reports["vq_loss"]:.4f}, '
                 f'activation {training_loop_reports["activation"]:.1f}')
+
+        if accelerator.is_main_process and wandb_run is not None:
+            wandb_run.log(
+                {
+                    'train/time/epoch_seconds': training_time,
+                    'train/steps_per_epoch': training_loop_reports['counter'],
+                    'train/epoch': epoch,
+                },
+                step=training_loop_reports['global_step'],
+            )
 
         global_step = training_loop_reports["global_step"]
         reached_max_steps = training_loop_reports.get("reached_max_steps", False)
@@ -648,7 +836,8 @@ def main(dict_config, config_file_path):
                                             optimizer=optimizer,
                                             scheduler=scheduler, configs=configs,
                                             logging=logging, global_step=global_step,
-                                            writer=valid_writer, result_path=result_path)
+                                            writer=valid_writer, result_path=result_path,
+                                            wandb_run=wandb_run if accelerator.is_main_process else None)
             end_time = time.time()
             valid_time = end_time - start_time
             accelerator.wait_for_everyone()
@@ -669,6 +858,15 @@ def main(dict_config, config_file_path):
                     f'vq loss {valid_loop_reports["vq_loss"]:.4f}, '
                     f'activation {valid_loop_reports["activation"]:.1f}'
                     # f'lddt {valid_loop_reports["lddt"]:.4f}'
+                )
+
+            if accelerator.is_main_process and wandb_run is not None:
+                wandb_run.log(
+                    {
+                        'eval/time/epoch_seconds': valid_time,
+                        'eval/epoch': epoch,
+                    },
+                    step=global_step,
                 )
 
             # Check valid metric to save the best model
@@ -715,6 +913,8 @@ def main(dict_config, config_file_path):
     if accelerator.is_main_process:
         train_writer.close()
         valid_writer.close()
+        if wandb_run is not None:
+            wandb_run.finish()
 
     accelerator.wait_for_everyone()
     accelerator.free_memory()
