@@ -134,6 +134,7 @@ class GCPConv(nn.Module):
         num_nodes = node_scalars.shape[0]
         dtype = node_scalars.dtype
         device = node_scalars.device
+        vector_dtype = node_vectors.dtype
 
         if src.numel() == 0:
             agg_vectors = torch.zeros(
@@ -144,25 +145,26 @@ class GCPConv(nn.Module):
             agg_edge = torch.zeros((num_nodes, self.edge_scalar_dim), dtype=dtype, device=device)
             counts = torch.ones((num_nodes, 1), dtype=dtype, device=device)
         else:
-            norm_scalars = self.scalar_norm(node_scalars)
-            norm_vectors = self.vector_norm(node_vectors)
+            norm_scalars = self.scalar_norm(node_scalars).to(dtype)
+            norm_vectors = self.vector_norm(node_vectors).to(vector_dtype)
 
             combined_vectors = _gather_edge_vectors(
                 norm_vectors, edge_index, edge_vectors, edge_vector_channels=self.edge_vector_channels
             )
 
-            down = vector_linear(combined_vectors, self.vec_down)
-            down_norm = safe_norm(down, dim=-1)
+            down = vector_linear(combined_vectors, self.vec_down).to(vector_dtype)
+            down_norm = safe_norm(down, dim=-1).to(dtype)
 
-            signature_vectors = vector_linear(combined_vectors, self.vec_signature)
+            signature_vectors = vector_linear(combined_vectors, self.vec_signature).to(edge_frames.dtype)
             orient = torch.einsum("eac,ebc->eab", signature_vectors, edge_frames).reshape(-1, 9)
+            orient = orient.to(dtype)
 
             counts = torch.zeros((num_nodes, 1), dtype=dtype, device=device)
             counts.index_add_(0, dst, torch.ones((dst.numel(), 1), dtype=dtype, device=device))
             counts = torch.clamp(counts, min=1.0)
 
             agg_vectors = torch.zeros(
-                (num_nodes, self.hidden_vector_channels, 3), dtype=node_vectors.dtype, device=device
+                (num_nodes, self.hidden_vector_channels, 3), dtype=vector_dtype, device=device
             )
             agg_vectors.index_add_(0, dst, down)
             agg_vectors = agg_vectors / counts.unsqueeze(-1)
@@ -180,7 +182,7 @@ class GCPConv(nn.Module):
                     agg_edge = torch.zeros((num_nodes, self.edge_scalar_dim), dtype=dtype, device=device)
                 else:
                     agg_edge = torch.zeros((num_nodes, self.edge_scalar_dim), dtype=dtype, device=device)
-                    agg_edge.index_add_(0, dst, edge_scalars)
+                    agg_edge.index_add_(0, dst, edge_scalars.to(dtype))
                     agg_edge = agg_edge / counts
             else:
                 agg_edge = torch.zeros((num_nodes, 0), dtype=dtype, device=device)
@@ -188,14 +190,18 @@ class GCPConv(nn.Module):
             norm_scalars = norm_scalars  # retained for residual below
 
         if src.numel() == 0:
-            norm_scalars = self.scalar_norm(node_scalars)
+            norm_scalars = self.scalar_norm(node_scalars).to(dtype)
 
         scalar_input = torch.cat((norm_scalars, agg_q, agg_norm, agg_edge), dim=-1)
-        scalar_update = self.scalar_mlp(scalar_input)
+
+        mlp_input_dtype = self.scalar_mlp[0].weight.dtype
+        gate_input_dtype = self.gate_mlp[0].weight.dtype
+
+        scalar_update = self.scalar_mlp(scalar_input.to(mlp_input_dtype)).to(dtype)
         scalars_out = node_scalars + self.dropout(scalar_update)
 
-        vector_update = vector_linear(agg_vectors, self.vec_up)
-        gate = torch.sigmoid(self.gate_mlp(scalar_input))
+        vector_update = vector_linear(agg_vectors, self.vec_up).to(vector_dtype)
+        gate = torch.sigmoid(self.gate_mlp(scalar_input.to(gate_input_dtype))).to(vector_dtype)
         gated = apply_gating(vector_update, gate)
         vectors_out = node_vectors + self.vector_dropout(gated)
 
@@ -297,8 +303,9 @@ class GCPNetEncoder(nn.Module):
         if node_vectors.ndim != 3:
             raise ValueError("node_vectors must have shape (N, C, 3)")
 
-        scalars = self.scalar_proj(node_scalars)
-        vectors = vector_linear(node_vectors, self.vector_proj)
+        scalar_proj_dtype = self.scalar_proj.weight.dtype
+        scalars = self.scalar_proj(node_scalars.to(scalar_proj_dtype)).to(node_scalars.dtype)
+        vectors = vector_linear(node_vectors, self.vector_proj).to(node_vectors.dtype)
 
         if mask is not None:
             mask = mask.to(torch.bool)
@@ -306,7 +313,8 @@ class GCPNetEncoder(nn.Module):
             vectors = vectors * mask.unsqueeze(-1).unsqueeze(-1)
 
         if self.edge_scalar_proj is not None and edge_scalars.numel():
-            edge_scalars_projected = self.edge_scalar_proj(edge_scalars)
+            proj_dtype = self.edge_scalar_proj.weight.dtype
+            edge_scalars_projected = self.edge_scalar_proj(edge_scalars.to(proj_dtype)).to(edge_scalars.dtype)
         elif self.edge_scalar_proj is not None:
             edge_scalars_projected = edge_scalars.new_zeros(
                 (edge_scalars.shape[0], self.config.edge_scalar_dim)
@@ -328,8 +336,9 @@ class GCPNetEncoder(nn.Module):
                 vectors = vectors * mask.unsqueeze(-1).unsqueeze(-1)
 
         vec_norms = safe_norm(vectors, dim=-1)
-        readout_input = torch.cat((scalars, vec_norms), dim=-1)
-        embeddings = self.readout(readout_input)
+        readout_input = torch.cat((scalars, vec_norms.to(scalars.dtype)), dim=-1)
+        readout_dtype = self.readout[1].weight.dtype
+        embeddings = self.readout(readout_input.to(readout_dtype)).to(scalars.dtype)
 
         output: Dict[str, Tensor] = {
             "embeddings": embeddings,
@@ -338,7 +347,8 @@ class GCPNetEncoder(nn.Module):
         }
 
         if self.displacement_head is not None:
-            displacement = self.displacement_head(scalars)
+            disp_input_dtype = self.displacement_head[1].weight.dtype
+            displacement = self.displacement_head(scalars.to(disp_input_dtype)).to(scalars.dtype)
             if mask is not None:
                 displacement = displacement * mask.unsqueeze(-1)
             output["displacement"] = displacement

@@ -52,6 +52,14 @@ def vector_linear(vectors: Tensor, weight: Tensor) -> Tensor:
             f"got {vectors.size(-2)}"
         )
 
+    vector_dtype = vectors.dtype
+    weight_dtype = weight.dtype
+
+    if vector_dtype != weight_dtype:
+        vectors = vectors.to(weight_dtype)
+        result = torch.einsum("oi,...ic->...oc", weight, vectors)
+        return result.to(vector_dtype)
+
     return torch.einsum("oi,...ic->...oc", weight, vectors)
 
 
