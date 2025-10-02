@@ -1,6 +1,0 @@
-# Pilot configuration for smoke tests (stub).
-model:
-  latent_dim: 128
-training:
-  batch_size: 4
-  epochs: 2
