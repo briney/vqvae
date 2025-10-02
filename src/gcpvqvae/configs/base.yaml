@@ -16,6 +16,9 @@ model:
     edge_vector_dim: 1
     latent_dim: 256
     layers: 6
+    init: random
+    init_checkpoint: null
+    strict_init: true
   vq:
     num_codes: 4096
     dim: 256

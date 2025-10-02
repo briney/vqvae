@@ -210,6 +210,9 @@ class GCPNetConfig:
     layers: int = 6
     dropout: float = 0.0
     displacement_head: bool = False
+    init: str = "random"
+    init_checkpoint: Optional[str] = None
+    strict_init: bool = True
 
 
 class GCPNetEncoder(nn.Module):

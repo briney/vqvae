@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, Optional, Tuple
+from typing import Any, Dict, Iterable, Mapping, Optional, Tuple
 
 import numpy as np
 import torch
@@ -16,6 +17,7 @@ from gcpvqvae.models.gcpnet import GCPNetConfig, GCPNetEncoder
 from gcpvqvae.models.losses import reconstruction_loss
 from gcpvqvae.models.transformer import GCPTokensTransformer, TransformerConfig
 from gcpvqvae.models.vq import VectorQuantizer
+from gcpvqvae.utils.checkpoint import load_checkpoint
 
 
 @dataclass
@@ -90,6 +92,7 @@ class GCPVQVAE(nn.Module):
         self.config = config or GCPVQVAEConfig()
 
         self.encoder_gcp = GCPNetEncoder(self.config.gcp)
+        self._initialize_gcp_encoder()
         self.encoder_transformer = GCPTokensTransformer(self.config.encoder)
         self.vq = VectorQuantizer(
             self.config.vq.num_codes,
@@ -110,6 +113,62 @@ class GCPVQVAE(nn.Module):
         )
 
     # ------------------------------------------------------------------ utils
+    def _initialize_gcp_encoder(self) -> None:
+        init_mode = getattr(self.config.gcp, "init", "random") or "random"
+        mode = init_mode.lower()
+        if mode == "random":
+            return
+        if mode != "pretrained":
+            raise ValueError(f"Unsupported GCPNet initialisation mode '{init_mode}'")
+
+        checkpoint = getattr(self.config.gcp, "init_checkpoint", None)
+        if not checkpoint:
+            raise ValueError(
+                "GCPNet pretrained initialisation requires 'checkpoint' to be set"
+            )
+
+        state = load_checkpoint(checkpoint, map_location="cpu")
+        state_dict = self._extract_gcp_state_dict(state)
+        if state_dict is None:
+            raise ValueError(
+                "Checkpoint does not contain GCPNet weights – expected a mapping under "
+                "'gcp_state', 'model_state', 'state_dict', or a raw state dict"
+            )
+
+        missing, unexpected = self.encoder_gcp.load_state_dict(
+            state_dict, strict=getattr(self.config.gcp, "strict_init", True)
+        )
+        if missing or unexpected:
+            warnings.warn(
+                "Loaded GCPNet weights with missing keys %s and unexpected keys %s"
+                % (missing, unexpected),
+                UserWarning,
+            )
+
+    @staticmethod
+    def _extract_gcp_state_dict(state: Mapping[str, Any]) -> Optional[Dict[str, Tensor]]:
+        if not isinstance(state, Mapping):
+            return None
+
+        candidate_keys = (
+            "gcp_state",
+            "gcpnet_state",
+            "encoder_state",
+            "encoder_state_dict",
+            "model_state",
+            "state_dict",
+        )
+        for key in candidate_keys:
+            if key in state:
+                candidate = state[key]
+                if isinstance(candidate, Mapping):
+                    return {k: v for k, v in candidate.items() if isinstance(k, str)}
+
+        if all(isinstance(k, str) and isinstance(v, torch.Tensor) for k, v in state.items()):
+            return {k: v for k, v in state.items() if isinstance(v, torch.Tensor)}
+
+        return None
+
     def _device(self) -> torch.device:
         return next(self.parameters()).device
 

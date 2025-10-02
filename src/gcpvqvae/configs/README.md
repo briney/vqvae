@@ -40,6 +40,9 @@ omitted the defaults listed below are applied by the underlying dataclasses.
 | `layers` | `6` | Number of stacked GCP convolution layers. |
 | `dropout` | `0.0` | Dropout applied within the convolutions. |
 | `displacement_head` | `False` | Enables an auxiliary displacement prediction head. |
+| `init` | `"random"` | Select `"random"` for fresh weights or `"pretrained"` to load from a checkpoint. |
+| `init_checkpoint` | `null` | Filesystem path to the checkpoint containing pretrained GCPNet weights. |
+| `strict_init` | `True` | Whether to enforce an exact key match when loading weights. |
 
 ### `model.encoder` and `model.decoder` – Transformer stacks (`TransformerConfig`)
 
@@ -154,6 +157,7 @@ Example templates are provided:
 - `base.yaml`: full-sized training schedule mirroring the manuscript.
 - `small.yaml`: reduced footprint configuration for local experiments.
 - `xsmall.yaml`: minimal configuration matching the continuous integration tests.
+- `gcpnet_pretrain.yaml`: lightweight schedule for pretraining the encoder in isolation.
 
 Feel free to copy these files and customise them using the options described
 above.
