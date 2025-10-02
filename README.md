@@ -99,6 +99,22 @@ Usage: gpcvq train [OPTIONS] CONFIG
   available under ``src/gcpvqvae/configs``.
 ```
 
+### Pretraining the GCPNet encoder
+
+When you want to initialise the full model from a pretrained encoder, use the
+`train-gpcnet` subcommand. The schema mirrors the main trainer but omits the VQ
+and Transformer components so that only the GCPNet and rigid reconstruction head
+are optimised:
+
+```bash
+gpcvq train-gpcnet src/gcpvqvae/configs/gcpnet_pretrain.yaml \
+    data.root=path/to/backbones
+```
+
+The resulting checkpoints expose a `gcp_state` entry that can be referenced from
+`model.gcp.init` (alongside `model.gcp.init_checkpoint`) in the full training
+configuration to load the encoder weights.
+
 ### Experiment logging with Weights & Biases
 
 Training jobs can stream metrics to [Weights & Biases](https://wandb.ai/site) by

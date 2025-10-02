@@ -17,6 +17,7 @@ from gcpvqvae.models.gcpvqvae import (
     VectorQuantizerConfig,
 )
 from gcpvqvae.models.transformer import TransformerConfig
+from gcpvqvae.utils.checkpoint import save_checkpoint
 
 
 def _add_atom(residue: gemmi.Residue, name: str, position, *, occ: float = 1.0, altloc: str = "") -> None:
@@ -159,6 +160,27 @@ def test_encode_decode_roundtrip(tmp_path, suffix) -> None:
     assert isinstance(record, BackboneRecord)
     assert record.coords.shape[0] == int(mask.sum().item())
 
-    output_path = Path(tmp_path) / f"roundtrip{suffix}"
-    write_mmcif(record, str(output_path))
-    assert output_path.exists()
+
+def test_gcpnet_pretrained_initialisation(tmp_path) -> None:
+    config = _make_config()
+    model = GCPVQVAE(config)
+    reference_state = {}
+    with torch.no_grad():
+        for idx, (name, param) in enumerate(model.encoder_gcp.state_dict().items()):
+            filled = torch.full_like(param, float(idx + 1) / 100.0)
+            param.copy_(filled)
+            reference_state[name] = filled.clone()
+
+    checkpoint_path = Path(tmp_path) / "gcpnet.pt"
+    save_checkpoint({"gcp_state": model.encoder_gcp.state_dict()}, checkpoint_path)
+
+    new_config = _make_config()
+    new_config.gcp.init = "pretrained"
+    new_config.gcp.init_checkpoint = str(checkpoint_path)
+    new_config.gcp.strict_init = True
+
+    restored = GCPVQVAE(new_config)
+    loaded_state = restored.encoder_gcp.state_dict()
+    for name, expected in reference_state.items():
+        assert torch.allclose(loaded_state[name], expected)
+

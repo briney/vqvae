@@ -146,6 +146,30 @@ def train_command(config: Path, overrides: Tuple[str, ...]) -> None:
 
 
 @gpcvq.command(
+    name="train-gpcnet",
+    short_help="Pretrain the standalone GCPNet encoder.",
+    help=(
+        "Run GCPNet pretraining using the configuration specified in CONFIG. "
+        "The configuration schema mirrors the full trainer but focuses on the "
+        "encoder and rigid reconstruction head."
+    ),
+)
+@click.argument(
+    "config",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    metavar="CONFIG",
+)
+@click.argument("overrides", nargs=-1, metavar="[OVERRIDE]...", type=str)
+def train_gpcnet_command(config: Path, overrides: Tuple[str, ...]) -> None:
+    """Launch GCPNet-only pretraining from the CLI."""
+
+    from gcpvqvae.system.train_gcpnet import train as run_train_gcpnet
+
+    raw_config = compose_overrides(config, overrides)
+    run_train_gcpnet(raw_config)
+
+
+@gpcvq.command(
     name="encode",
     short_help="Encode backbone structures into discrete tokens.",
     help=(
