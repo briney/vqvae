@@ -70,6 +70,7 @@ model:  # Settings controlling model construction
 train_settings:  # Parameters that control the training loop
   data_path: ../../datasets/vqvae/uniref_50/  # Directory containing HDF5 training data
   num_epochs: 32  # Total number of epochs to train for
+  num_steps: null  # Optional total number of optimizer steps to run; overrides num_epochs when provided
   sample_weighting:  # Curriculum weighting on samples by sequence length
     enabled: True  # Turn dynamic sample weighting on or off
     min_weight: 1.0  # Minimum weight assigned to any training example
