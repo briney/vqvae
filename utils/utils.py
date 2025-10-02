@@ -297,10 +297,22 @@ def prepare_tensorboard(result_path):
 def prepare_optimizer(net, configs, num_train_samples, logging):
     optimizer, scheduler = load_opt(net, configs, logging)
     if scheduler is None:
-        whole_steps = np.ceil(
+        steps_per_epoch = np.ceil(
             num_train_samples / configs.train_settings.grad_accumulation
-        ) * configs.train_settings.num_epochs / configs.optimizer.decay.num_restarts
-        first_cycle_steps = np.ceil(whole_steps / configs.optimizer.decay.num_restarts)
+        )
+        configured_num_steps = getattr(configs.train_settings, 'num_steps', None)
+        if configured_num_steps is not None:
+            total_training_steps = int(configured_num_steps)
+        else:
+            total_training_steps = int(np.ceil(steps_per_epoch * configs.train_settings.num_epochs))
+
+        if total_training_steps <= 0:
+            raise ValueError('Total number of training steps must be positive to build the scheduler.')
+
+        num_restarts = max(1, configs.optimizer.decay.num_restarts)
+        whole_steps = total_training_steps / num_restarts
+        first_cycle_steps = int(np.ceil(whole_steps / num_restarts))
+        first_cycle_steps = max(1, first_cycle_steps)
         scheduler = CosineAnnealingWarmupRestarts(
             optimizer,
             first_cycle_steps=first_cycle_steps,

@@ -116,6 +116,7 @@ def train_loop(net, train_loader, epoch, adaptive_loss_coeffs, **kwargs):
     logging = kwargs.pop('logging')
     profiler = kwargs.pop('profiler')
     profile_train_loop = kwargs.pop('profile_train_loop')
+    max_steps = kwargs.pop('max_steps', None)
     codebook_size = configs.model.vqvae.vector_quantization.codebook_size
     accum_iter = configs.train_settings.grad_accumulation
     alignment_strategy = configs.train_settings.losses.alignment_strategy
@@ -135,6 +136,7 @@ def train_loop(net, train_loader, epoch, adaptive_loss_coeffs, **kwargs):
     progress_bar.set_description(f"Epoch {epoch}")
 
     net.train()
+    reached_max_steps = False
     for i, data in enumerate(train_loader):
         with accelerator.accumulate(net):
             if profile_train_loop:
@@ -211,6 +213,10 @@ def train_loop(net, train_loader, epoch, adaptive_loss_coeffs, **kwargs):
                 progress_bar.update(1)
                 global_step += 1
 
+                if max_steps is not None and global_step >= max_steps:
+                    reached_max_steps = True
+                    break
+
                 if (
                     accelerator.is_main_process
                     and train_save_mode == 'steps'
@@ -255,6 +261,9 @@ def train_loop(net, train_loader, epoch, adaptive_loss_coeffs, **kwargs):
                 progress_postfix(optimizer, loss_dict, global_step)
             )
 
+        if reached_max_steps:
+            break
+
     # Compute average losses and metrics
     avgs = average_losses(acc)
     metrics_values = compute_metrics(metrics)
@@ -289,7 +298,8 @@ def train_loop(net, train_loader, epoch, adaptive_loss_coeffs, **kwargs):
         "activation": np.round(avg_activation * 100, 1),
         "counter": acc['counter'],
         "global_step": global_step,
-        "adaptive_loss_coeffs": adaptive_loss_coeffs
+        "adaptive_loss_coeffs": adaptive_loss_coeffs,
+        "reached_max_steps": reached_max_steps,
     }
     return return_dict
 
@@ -520,6 +530,19 @@ def main(dict_config, config_file_path):
         train_steps = np.ceil(len(train_dataloader) / configs.train_settings.grad_accumulation)
         logging.info(f'number of train steps per epoch: {int(train_steps)}')
 
+    max_steps = getattr(configs.train_settings, 'num_steps', None)
+    if max_steps is not None:
+        max_steps = int(max_steps)
+        if max_steps <= 0:
+            raise ValueError('train_settings.num_steps must be a positive integer when provided.')
+        if accelerator.is_main_process:
+            logging.info(
+                'Training duration configured for %s optimizer steps; this overrides num_epochs.',
+                f'{max_steps:,}'
+            )
+
+    total_epochs = int(getattr(configs.train_settings, 'num_epochs', 0))
+
     # Maybe monitor resource usage during training.
     prof = None
     profile_train_loop = configs.train_settings.profile_train_loop
@@ -552,7 +575,11 @@ def main(dict_config, config_file_path):
 
     best_valid_metrics = {'gdtts': 0.0, 'mae': 1000.0, 'rmsd': 1000.0, 'lddt': 0.0, 'loss': 1000.0, 'tm_score': 0.0,
                           'perplexity': 1000.0}
-    for epoch in range(1, configs.train_settings.num_epochs + 1):
+    epoch = 0
+    while True:
+        if max_steps is None and epoch >= total_epochs:
+            break
+        epoch += 1
         start_time = time.time()
         training_loop_reports = train_loop(net, train_dataloader, epoch, adaptive_loss_coeffs,
                                            accelerator=accelerator,
@@ -560,7 +587,8 @@ def main(dict_config, config_file_path):
                                            scheduler=scheduler, configs=configs,
                                            logging=logging, global_step=global_step,
                                            writer=train_writer, result_path=result_path,
-                                           profiler=prof, profile_train_loop=profile_train_loop)
+                                           profiler=prof, profile_train_loop=profile_train_loop,
+                                           max_steps=max_steps)
 
         if profile_train_loop:
             prof.stop()
@@ -587,6 +615,7 @@ def main(dict_config, config_file_path):
                 f'activation {training_loop_reports["activation"]:.1f}')
 
         global_step = training_loop_reports["global_step"]
+        reached_max_steps = training_loop_reports.get("reached_max_steps", False)
         # Update adaptive coefficients from training loop
         adaptive_loss_coeffs = training_loop_reports.get("adaptive_loss_coeffs", adaptive_loss_coeffs)
         accelerator.wait_for_everyone()
@@ -664,6 +693,14 @@ def main(dict_config, config_file_path):
                                 configs=configs)
                 logging.info(f'\tsaving the best models in {model_path}')
                 logging.info(f'\tbest valid rmsd: {best_valid_metrics["rmsd"]:.4f}')
+
+        if max_steps is not None and reached_max_steps:
+            if accelerator.is_main_process:
+                logging.info(
+                    'Reached the configured maximum number of training steps (%s); ending training loop.',
+                    f'{max_steps:,}'
+                )
+            break
 
     logging.info("Training is completed!\n")
 
