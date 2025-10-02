@@ -177,7 +177,7 @@ def adjust_adaptive_coefficients(adaptive_loss_coeffs, global_grad_norms, config
     return adaptive_loss_coeffs
 
 
-def log_per_loss_components(writer, loss_dict, global_step):
+def log_per_loss_components(writer, loss_dict, global_step, phase: str = 'train', wandb_run=None):
     """
     Log individual loss components to TensorBoard with hierarchical naming.
 
@@ -187,16 +187,29 @@ def log_per_loss_components(writer, loss_dict, global_step):
         global_step (int): Current global training step.
     """
     # Log each loss component with hierarchical naming
+    wandb_payload = {}
     for loss_name, loss_value in loss_dict.items():
         if torch.is_tensor(loss_value) and loss_value.numel() == 1:
+            scalar = loss_value.item()
             if loss_name.startswith('unscaled_'):
                 base_name = loss_name[len('unscaled_'):]
-                writer.add_scalar(f'unscaled_step_loss/{base_name}', loss_value.item(), global_step)
+                if writer is not None:
+                    writer.add_scalar(f'unscaled_step_loss/{base_name}', scalar, global_step)
+                if wandb_run is not None:
+                    suffix = base_name[:-5] if base_name.endswith('_loss') else base_name
+                    wandb_payload[f'{phase}/unscaled_step_loss/{suffix}'] = float(scalar)
             else:
-                writer.add_scalar(f'step_loss/{loss_name}', loss_value.item(), global_step)
+                if writer is not None:
+                    writer.add_scalar(f'step_loss/{loss_name}', scalar, global_step)
+                if wandb_run is not None:
+                    suffix = loss_name[:-5] if loss_name.endswith('_loss') else loss_name
+                    wandb_payload[f'{phase}/step_loss/{suffix}'] = float(scalar)
+
+    if wandb_run is not None and wandb_payload:
+        wandb_run.log(wandb_payload, step=global_step)
 
 
-def log_gradient_norms_and_coeffs(writer, global_grad_norms, adaptive_loss_coeffs, global_step):
+def log_gradient_norms_and_coeffs(writer, global_grad_norms, adaptive_loss_coeffs, global_step, phase: str = 'train', wandb_run=None):
     """
     Log gradient norms and adaptive coefficients to TensorBoard.
 
@@ -207,19 +220,30 @@ def log_gradient_norms_and_coeffs(writer, global_grad_norms, adaptive_loss_coeff
         global_step (int): Current global training step.
     """
     # Log gradient norms
+    wandb_payload = {}
     for key, norm in global_grad_norms.items():
-        writer.add_scalar(f'gradient norm/{key}', norm, global_step)
+        if writer is not None:
+            writer.add_scalar(f'gradient norm/{key}', norm, global_step)
+        if wandb_run is not None:
+            wandb_payload[f'{phase}/gradient_norm/{key}'] = float(norm)
 
     # Log adaptive coefficients
     for coeff_name, coeff_val in adaptive_loss_coeffs.items():
-        writer.add_scalar(f'adaptive_coeff/{coeff_name}', coeff_val, global_step)
+        if writer is not None:
+            writer.add_scalar(f'adaptive_coeff/{coeff_name}', coeff_val, global_step)
+        if wandb_run is not None:
+            wandb_payload[f'{phase}/adaptive_coeff/{coeff_name}'] = float(coeff_val)
+
+    if wandb_run is not None and wandb_payload:
+        wandb_run.log(wandb_payload, step=global_step)
 
 
-def log_per_loss_grad_norms(loss_dict, net, configs, writer, accelerator, global_step, adaptive_loss_coeffs):
+def log_per_loss_grad_norms(loss_dict, net, configs, writer, accelerator, global_step, adaptive_loss_coeffs, wandb_run=None):
     """
     Log per-loss gradient norms, individual loss components, and adjust adaptive coefficients based on global gradient norms.
     Only activates when adaptive mode is enabled and warmup period is complete.
-    Logs gradient norms, adaptive coefficients, and individual loss components to TensorBoard with hierarchical naming.
+    Logs gradient norms, adaptive coefficients, and individual loss components to TensorBoard with hierarchical naming and
+    mirrors these values to WandB when enabled.
 
     Args:
         loss_dict (dict): Loss components from calculate_decoder_loss
@@ -229,6 +253,7 @@ def log_per_loss_grad_norms(loss_dict, net, configs, writer, accelerator, global
         accelerator: HuggingFace Accelerator
         global_step (int): Current global training step
         adaptive_loss_coeffs (dict): Current adaptive coefficients
+        wandb_run: Optional WandB run used for logging scalars
 
     Returns:
         dict: Updated adaptive coefficients
@@ -299,9 +324,22 @@ def log_per_loss_grad_norms(loss_dict, net, configs, writer, accelerator, global
 
     if accelerator.is_main_process:
         # Log gradient norms, coefficients, and individual loss components
-        if configs.tensorboard_log:
-            log_gradient_norms_and_coeffs(writer, global_grad_norms, adaptive_loss_coeffs, global_step)
-            log_per_loss_components(writer, loss_dict, global_step)
+        tensorboard_writer = writer if configs.tensorboard_log else None
+        log_gradient_norms_and_coeffs(
+            tensorboard_writer,
+            global_grad_norms,
+            adaptive_loss_coeffs,
+            global_step,
+            phase='train',
+            wandb_run=wandb_run,
+        )
+        log_per_loss_components(
+            tensorboard_writer,
+            loss_dict,
+            global_step,
+            phase='train',
+            wandb_run=wandb_run,
+        )
 
     if (global_step > configs.optimizer.decay.warmup and
             len(local_grad_norms) > 0):  # Only broadcast if we have any losses with adaptive coefficients
