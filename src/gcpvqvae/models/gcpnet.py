@@ -203,6 +203,7 @@ class GCPNetConfig:
     node_scalar_dim: int = 6
     node_vector_dim: int = 3
     edge_scalar_dim: int = 8
+    edge_scalar_input_dim: Optional[int] = None
     edge_vector_dim: int = 1
     hidden_scalar_dim: int = 128
     hidden_vector_dim: int = 16
@@ -223,10 +224,28 @@ class GCPNetEncoder(nn.Module):
 
         self.config = config or GCPNetConfig()
 
+        self.edge_scalar_in_dim = (
+            self.config.edge_scalar_input_dim
+            if self.config.edge_scalar_input_dim is not None
+            else self.config.edge_scalar_dim
+        )
+
         self.scalar_proj = nn.Linear(self.config.node_scalar_dim, self.config.hidden_scalar_dim, bias=False)
         self.vector_proj = nn.Parameter(
             torch.randn(self.config.hidden_vector_dim, self.config.node_vector_dim) * 0.02
         )
+
+        if self.config.edge_scalar_dim > 0:
+            self.edge_scalar_proj = nn.Linear(
+                self.edge_scalar_in_dim,
+                self.config.edge_scalar_dim,
+                bias=False,
+            )
+            if self.edge_scalar_in_dim == self.config.edge_scalar_dim:
+                with torch.no_grad():
+                    self.edge_scalar_proj.weight.copy_(torch.eye(self.config.edge_scalar_dim))
+        else:
+            self.edge_scalar_proj = None
 
         self.layers = nn.ModuleList(
             [
@@ -283,8 +302,24 @@ class GCPNetEncoder(nn.Module):
             scalars = scalars * mask.unsqueeze(-1)
             vectors = vectors * mask.unsqueeze(-1).unsqueeze(-1)
 
+        if self.edge_scalar_proj is not None and edge_scalars.numel():
+            edge_scalars_projected = self.edge_scalar_proj(edge_scalars)
+        elif self.edge_scalar_proj is not None:
+            edge_scalars_projected = edge_scalars.new_zeros(
+                (edge_scalars.shape[0], self.config.edge_scalar_dim)
+            )
+        else:
+            edge_scalars_projected = edge_scalars
+
         for layer in self.layers:
-            scalars, vectors = layer(scalars, vectors, edge_index, edge_scalars, edge_vectors, edge_frames)
+            scalars, vectors = layer(
+                scalars,
+                vectors,
+                edge_index,
+                edge_scalars_projected,
+                edge_vectors,
+                edge_frames,
+            )
             if mask is not None:
                 scalars = scalars * mask.unsqueeze(-1)
                 vectors = vectors * mask.unsqueeze(-1).unsqueeze(-1)

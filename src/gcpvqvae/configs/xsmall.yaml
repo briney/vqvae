@@ -9,15 +9,19 @@ data:
 
 model:
   gcp:
-    hidden_scalar_dim: 16
-    hidden_vector_dim: 4
-    edge_scalar_dim: 8
+    hidden_scalar_dim: 128
+    hidden_vector_dim: 16
+    edge_scalar_dim: 32
+    edge_scalar_input_dim: 8
     edge_vector_dim: 1
-    latent_dim: 16
-    layers: 2
+    latent_dim: 256
+    layers: 6
     init: random
     init_checkpoint: null
     strict_init: true
+  adapter:
+    enabled: true
+    output_dim: 16
   vq:
     num_codes: 16
     dim: 16

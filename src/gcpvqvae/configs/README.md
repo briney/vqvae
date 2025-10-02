@@ -33,6 +33,7 @@ omitted the defaults listed below are applied by the underlying dataclasses.
 | `node_scalar_dim` | `6` | Input scalar feature channels per residue. |
 | `node_vector_dim` | `3` | Input vector feature channels per residue. |
 | `edge_scalar_dim` | `8` | Scalar features attached to each edge. |
+| `edge_scalar_input_dim` | `null` | Optional raw dimensionality of edge scalar features (defaults to `edge_scalar_dim`). |
 | `edge_vector_dim` | `1` | Vector features per edge. |
 | `hidden_scalar_dim` | `128` | Scalar width of the hidden representations. |
 | `hidden_vector_dim` | `16` | Vector channel count inside the GCP blocks. |
@@ -43,6 +44,14 @@ omitted the defaults listed below are applied by the underlying dataclasses.
 | `init` | `"random"` | Select `"random"` for fresh weights or `"pretrained"` to load from a checkpoint. |
 | `init_checkpoint` | `null` | Filesystem path to the checkpoint containing pretrained GCPNet weights. |
 | `strict_init` | `True` | Whether to enforce an exact key match when loading weights. |
+
+### `model.adapter` – Latent projection (`LatentAdapterConfig`)
+
+| key | default | description |
+| --- | --- | --- |
+| `enabled` | `False` | Enables the linear adapter between the GCP encoder and Transformer stack. |
+| `output_dim` | `null` | Target dimensionality for the adapter projection (defaults to `model.vq.dim` when omitted). |
+| `bias` | `False` | Adds a bias term to the projection layer when set to `True`. |
 
 ### `model.encoder` and `model.decoder` – Transformer stacks (`TransformerConfig`)
 
@@ -155,8 +164,8 @@ Each stage entry orchestrates one phase of the curriculum.  Provide either
 Example templates are provided:
 
 - `base.yaml`: full-sized training schedule mirroring the manuscript.
-- `small.yaml`: reduced footprint configuration for local experiments.
-- `xsmall.yaml`: minimal configuration matching the continuous integration tests.
+- `small.yaml`: reduced footprint configuration for local experiments, reusing the base GCPNet with a latent adapter to shrink the Transformer.
+- `xsmall.yaml`: minimal configuration matching the continuous integration tests, also using the latent adapter for compact Transformer/VQ settings.
 - `gcpnet_pretrain.yaml`: lightweight schedule for pretraining the encoder in isolation.
 
 Feel free to copy these files and customise them using the options described
