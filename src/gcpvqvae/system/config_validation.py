@@ -92,10 +92,35 @@ def _check_model_consistency(raw_model: Optional[Dict[str, Any]]) -> List[Valida
     decoder_model_dim = _get_nested(raw_model, "decoder", "model_dim")
     rotation_input = _get_nested(raw_model, "rotation", "input_dim")
     vq_dim = _get_nested(raw_model, "vq", "dim")
+    adapter_enabled = _get_nested(raw_model, "adapter", "enabled")
+    adapter_output = _get_nested(raw_model, "adapter", "output_dim")
 
     if latent_dim is not None:
         _ensure_positive(latent_dim, "model.gcp.latent_dim", issues)
-    if encoder_input is not None and latent_dim is not None and encoder_input != latent_dim:
+    if adapter_enabled:
+        if adapter_output is not None:
+            _ensure_positive(adapter_output, "model.adapter.output_dim", issues)
+        target_input = adapter_output if adapter_output is not None else vq_dim
+        if (
+            encoder_input is not None
+            and target_input is not None
+            and encoder_input != target_input
+        ):
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    (
+                        "encoder.input_dim (%s) does not match latent adapter output (%s)"
+                        % (encoder_input, target_input)
+                    ),
+                    "model.encoder.input_dim",
+                )
+            )
+    elif (
+        encoder_input is not None
+        and latent_dim is not None
+        and encoder_input != latent_dim
+    ):
         issues.append(
             ValidationIssue(
                 "error",

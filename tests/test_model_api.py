@@ -13,6 +13,7 @@ from gcpvqvae.models.gcpvqvae import (
     DataPipelineConfig,
     GCPVQVAE,
     GCPVQVAEConfig,
+    LatentAdapterConfig,
     RotationHeadConfig,
     VectorQuantizerConfig,
 )
@@ -159,6 +160,64 @@ def test_encode_decode_roundtrip(tmp_path, suffix) -> None:
     record = decoded["records"]
     assert isinstance(record, BackboneRecord)
     assert record.coords.shape[0] == int(mask.sum().item())
+
+
+def test_latent_adapter_projects_embeddings(tmp_path) -> None:
+    structure_path = Path(tmp_path) / "adapter.cif"
+    _build_test_structure(structure_path)
+
+    dataset = BackboneDataset(structure_path, k=2, progress=False)
+    batch = collate_backbones([dataset[0]])
+
+    gcp_cfg = GCPNetConfig(
+        hidden_scalar_dim=128,
+        hidden_vector_dim=16,
+        edge_scalar_dim=32,
+        edge_scalar_input_dim=8,
+        edge_vector_dim=1,
+        latent_dim=256,
+        layers=3,
+    )
+    adapter_cfg = LatentAdapterConfig(enabled=True, output_dim=32, bias=True)
+    vq_cfg = VectorQuantizerConfig(num_codes=16, dim=24, beta=0.25, decay=0.9, kmeans_iters=1)
+    enc_cfg = TransformerConfig(
+        input_dim=gcp_cfg.latent_dim,
+        model_dim=48,
+        output_dim=vq_cfg.dim,
+        num_layers=2,
+        num_heads=4,
+        num_kv_heads=2,
+        dropout=0.0,
+    )
+    dec_cfg = TransformerConfig(
+        input_dim=vq_cfg.dim,
+        model_dim=48,
+        num_layers=2,
+        num_heads=4,
+        num_kv_heads=1,
+        dropout=0.0,
+    )
+    rot_cfg = RotationHeadConfig(input_dim=48, translation_scale=1.0)
+    data_cfg = DataPipelineConfig(length_cap=512, knn=2)
+    config = GCPVQVAEConfig(
+        gcp=gcp_cfg,
+        encoder=enc_cfg,
+        decoder=dec_cfg,
+        vq=vq_cfg,
+        rotation=rot_cfg,
+        data=data_cfg,
+        adapter=adapter_cfg,
+    )
+
+    model = GCPVQVAE(config)
+    assert model.latent_adapter is not None
+    assert model.latent_adapter.weight.shape[1] == gcp_cfg.latent_dim
+    assert model.latent_adapter.weight.shape[0] == adapter_cfg.output_dim
+    assert model.encoder_transformer.config.input_dim == adapter_cfg.output_dim
+
+    output = model(batch)
+    assert output["gcp_embeddings"].shape[-1] == gcp_cfg.latent_dim
+    assert output["encoder_hidden"].shape[-1] == vq_cfg.dim
 
 
 def test_gcpnet_pretrained_initialisation(tmp_path) -> None:

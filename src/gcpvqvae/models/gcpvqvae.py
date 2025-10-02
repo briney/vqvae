@@ -44,6 +44,15 @@ class VectorQuantizerConfig:
 
 
 @dataclass
+class LatentAdapterConfig:
+    """Optional linear adapter bridging the GCP encoder and Transformer."""
+
+    enabled: bool = False
+    output_dim: Optional[int] = None
+    bias: bool = False
+
+
+@dataclass
 class RotationHeadConfig:
     """Parameters for the rigid 6D rotation decoder head."""
 
@@ -66,12 +75,22 @@ class GCPVQVAEConfig:
         )
     )
     vq: VectorQuantizerConfig = field(default_factory=VectorQuantizerConfig)
+    adapter: LatentAdapterConfig = field(default_factory=LatentAdapterConfig)
     rotation: RotationHeadConfig = field(default_factory=RotationHeadConfig)
     data: DataPipelineConfig = field(default_factory=DataPipelineConfig)
 
     def __post_init__(self) -> None:
         # Ensure dimensional consistency between the sub-modules.
-        self.encoder.input_dim = self.gcp.latent_dim
+        if self.adapter.enabled:
+            target_dim = self.adapter.output_dim or self.vq.dim
+            if target_dim is None:
+                raise ValueError(
+                    "Latent adapter requires either 'output_dim' or 'vq.dim' to be set"
+                )
+            self.adapter.output_dim = target_dim
+            self.encoder.input_dim = target_dim
+        else:
+            self.encoder.input_dim = self.gcp.latent_dim
         self.encoder.output_dim = self.vq.dim
         self.decoder.input_dim = self.vq.dim
         if self.decoder.output_dim is None:
@@ -93,6 +112,15 @@ class GCPVQVAE(nn.Module):
 
         self.encoder_gcp = GCPNetEncoder(self.config.gcp)
         self._initialize_gcp_encoder()
+        self.latent_adapter: Optional[nn.Module]
+        if self.config.adapter.enabled:
+            self.latent_adapter = nn.Linear(
+                self.config.gcp.latent_dim,
+                self.config.adapter.output_dim or self.config.vq.dim,
+                bias=self.config.adapter.bias,
+            )
+        else:
+            self.latent_adapter = None
         self.encoder_transformer = GCPTokensTransformer(self.config.encoder)
         self.vq = VectorQuantizer(
             self.config.vq.num_codes,
@@ -184,6 +212,11 @@ class GCPVQVAE(nn.Module):
     def _reshape_batch(self, tensor: Tensor, batch: int, length: int) -> Tensor:
         return tensor.reshape(batch, length, *tensor.shape[1:])
 
+    def _project_embeddings(self, embeddings: Tensor) -> Tensor:
+        if self.latent_adapter is None:
+            return embeddings
+        return self.latent_adapter(embeddings)
+
     # ----------------------------------------------------------------- forward
     def forward(self, batch: Dict[str, Tensor]) -> Dict[str, Tensor]:
         device = self._device()
@@ -216,8 +249,9 @@ class GCPVQVAE(nn.Module):
             mask=flat_mask,
         )
         embeddings = gcp_out["embeddings"].reshape(batch_size, max_len, -1)
+        projected = self._project_embeddings(embeddings)
 
-        enc_hidden = self.encoder_transformer(embeddings, mask=mask)
+        enc_hidden = self.encoder_transformer(projected, mask=mask)
         quantized, indices, vq_losses = self.vq(enc_hidden, mask=mask)
 
         dec_hidden = self.decoder_transformer(quantized, mask=mask)
@@ -296,7 +330,8 @@ class GCPVQVAE(nn.Module):
             mask=mask,
         )
         embeddings = gcp_out["embeddings"].unsqueeze(0)
-        enc_hidden = self.encoder_transformer(embeddings, mask=mask.unsqueeze(0))
+        projected = self._project_embeddings(embeddings)
+        enc_hidden = self.encoder_transformer(projected, mask=mask.unsqueeze(0))
         quantized, indices, vq_losses = self.vq(enc_hidden, mask=mask.unsqueeze(0))
         return embeddings, enc_hidden, quantized, {"indices": indices, "vq": vq_losses}
 
@@ -484,6 +519,7 @@ __all__ = [
     "GCPVQVAE",
     "GCPVQVAEConfig",
     "VectorQuantizerConfig",
+    "LatentAdapterConfig",
     "RotationHeadConfig",
     "DataPipelineConfig",
 ]
