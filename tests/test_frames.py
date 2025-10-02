@@ -215,3 +215,29 @@ def test_kabsch_align_low_precision_dtypes(dtype: torch.dtype) -> None:
     assert torch.allclose(R.to(torch.float32), expected_rotation, atol=5e-2, rtol=5e-2)
     assert torch.allclose(t.to(torch.float32), expected_translation, atol=5e-2, rtol=5e-2)
     assert torch.allclose(aligned.to(torch.float32), transformed.to(torch.float32), atol=5e-2, rtol=5e-2)
+
+
+def test_kabsch_align_promotes_dtype_for_det(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ensure determinant check runs in a safe dtype for low precision inputs."""
+
+    _set_seed()
+    device = torch.device("cpu")
+    dtype = torch.bfloat16
+    points = torch.randn(10, 3, device=device, dtype=dtype)
+    rotation = _random_rotation(device, torch.float32).to(dtype)
+    translation = torch.tensor([0.1, -0.2, 0.3], device=device, dtype=dtype)
+    transformed = (points @ rotation) + translation
+
+    seen_dtypes: list[torch.dtype] = []
+    original_det = torch.linalg.det
+
+    def det_wrapper(matrix: torch.Tensor, *args, **kwargs):  # type: ignore[no-untyped-def]
+        seen_dtypes.append(matrix.dtype)
+        return original_det(matrix, *args, **kwargs)
+
+    monkeypatch.setattr(torch.linalg, "det", det_wrapper)
+
+    kabsch_align(points, transformed, return_aligned=False)
+
+    assert seen_dtypes, "determinant should have been computed"
+    assert all(dtype == torch.float32 for dtype in seen_dtypes)

@@ -212,7 +212,14 @@ def kabsch_align(
     rotation = u @ vh
 
     if not allow_reflections:
-        det = torch.linalg.det(rotation)
+        # ``torch.linalg.det`` does not currently support the low precision
+        # dtypes that ``kabsch_align`` needs to handle (``float16`` and
+        # ``bfloat16``) on all backends.  Mixed precision training pipelines can
+        # therefore fail when the autocaster requests one of those types.
+        # Promote to ``float32`` for the determinant check which is only used to
+        # decide whether to flip the last singular vector, and cast back later if
+        # required.
+        det = torch.linalg.det(rotation.to(torch.float32))
         if det < 0:
             vh = vh.clone()
             vh[-1, :] *= -1
