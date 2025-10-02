@@ -11,6 +11,10 @@ from torch import Tensor, nn
 from .gcpcore import apply_gating, safe_norm, vector_linear
 
 
+# Default number of scalar edge features produced by the featurisation pipeline.
+DEFAULT_EDGE_SCALAR_INPUT_DIM = 8
+
+
 class VectorLayerNorm(nn.Module):
     """LayerNorm-style normalisation for vector features."""
 
@@ -203,7 +207,7 @@ class GCPNetConfig:
     node_scalar_dim: int = 6
     node_vector_dim: int = 3
     edge_scalar_dim: int = 8
-    edge_scalar_input_dim: Optional[int] = None
+    edge_scalar_input_dim: Optional[int] = DEFAULT_EDGE_SCALAR_INPUT_DIM
     edge_vector_dim: int = 1
     hidden_scalar_dim: int = 128
     hidden_vector_dim: int = 16
@@ -224,11 +228,10 @@ class GCPNetEncoder(nn.Module):
 
         self.config = config or GCPNetConfig()
 
-        self.edge_scalar_in_dim = (
-            self.config.edge_scalar_input_dim
-            if self.config.edge_scalar_input_dim is not None
-            else self.config.edge_scalar_dim
-        )
+        if self.config.edge_scalar_input_dim is None:
+            self.edge_scalar_in_dim = self.config.edge_scalar_dim
+        else:
+            self.edge_scalar_in_dim = self.config.edge_scalar_input_dim
 
         self.scalar_proj = nn.Linear(self.config.node_scalar_dim, self.config.hidden_scalar_dim, bias=False)
         self.vector_proj = nn.Parameter(
@@ -343,4 +346,10 @@ class GCPNetEncoder(nn.Module):
         return output
 
 
-__all__ = ["GCPNetEncoder", "GCPNetConfig", "GCPConv", "VectorLayerNorm"]
+__all__ = [
+    "GCPNetEncoder",
+    "GCPNetConfig",
+    "GCPConv",
+    "VectorLayerNorm",
+    "DEFAULT_EDGE_SCALAR_INPUT_DIM",
+]
