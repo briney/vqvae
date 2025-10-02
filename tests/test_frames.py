@@ -193,3 +193,25 @@ def test_kabsch_align_float32_accuracy() -> None:
     assert torch.allclose(R, rotation, atol=1e-5)
     assert torch.allclose(t, translation, atol=1e-5)
     assert aligned is not None and torch.allclose(aligned, transformed, atol=1e-5)
+
+
+@pytest.mark.parametrize("dtype", [torch.bfloat16])
+def test_kabsch_align_low_precision_dtypes(dtype: torch.dtype) -> None:
+    _set_seed()
+    device = torch.device("cpu")
+    points = torch.randn(12, 3, device=device, dtype=dtype)
+    rotation = _random_rotation(device, torch.float32).to(dtype)
+    translation = torch.tensor([0.25, -0.4, 0.9], device=device, dtype=dtype)
+
+    transformed = (points @ rotation) + translation
+    R, t, aligned = kabsch_align(points, transformed, return_aligned=True)
+
+    assert R.dtype == dtype
+    assert t.dtype == dtype
+    assert aligned is not None and aligned.dtype == dtype
+
+    expected_rotation = rotation.to(torch.float32)
+    expected_translation = translation.to(torch.float32)
+    assert torch.allclose(R.to(torch.float32), expected_rotation, atol=5e-2, rtol=5e-2)
+    assert torch.allclose(t.to(torch.float32), expected_translation, atol=5e-2, rtol=5e-2)
+    assert torch.allclose(aligned.to(torch.float32), transformed.to(torch.float32), atol=5e-2, rtol=5e-2)

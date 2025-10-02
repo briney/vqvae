@@ -204,7 +204,11 @@ def kabsch_align(
 
     cov = src_centered.transpose(0, 1) @ dst_centered
 
-    u, _, vh = torch.linalg.svd(cov, full_matrices=False)
+    svd_input = cov
+    if cov.dtype in (torch.float16, torch.bfloat16):
+        svd_input = cov.to(torch.float32)
+
+    u, _, vh = torch.linalg.svd(svd_input, full_matrices=False)
     rotation = u @ vh
 
     if not allow_reflections:
@@ -213,6 +217,9 @@ def kabsch_align(
             vh = vh.clone()
             vh[-1, :] *= -1
             rotation = u @ vh
+
+    if rotation.dtype != src_sel.dtype:
+        rotation = rotation.to(src_sel.dtype)
 
     translation = dst_mean - src_mean @ rotation
 
