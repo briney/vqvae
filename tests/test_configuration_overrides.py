@@ -4,7 +4,11 @@ from pathlib import Path
 
 import yaml
 
-from gcpvqvae.system.configuration import compose_overrides
+from gcpvqvae.system.configuration import (
+    DEFAULT_GCPNET_PRETRAIN_CONFIG_PATH,
+    DEFAULT_TRAIN_CONFIG_PATH,
+    compose_overrides,
+)
 
 
 def _write_config(path: Path, config: dict) -> Path:
@@ -28,3 +32,19 @@ def test_cli_overrides_update_logging_block(tmp_path):
 
     assert result["train"]["log"]["enabled"] is True
     assert result["train"]["log"]["project"] == "my-project"
+
+
+def test_default_train_config_matches_base_yaml():
+    raw = yaml.safe_load(DEFAULT_TRAIN_CONFIG_PATH.read_text(encoding="utf-8"))
+    result = compose_overrides(DEFAULT_TRAIN_CONFIG_PATH, ())
+
+    assert result == raw
+
+
+def test_default_gcpnet_config_matches_packaged_yaml():
+    raw = yaml.safe_load(
+        DEFAULT_GCPNET_PRETRAIN_CONFIG_PATH.read_text(encoding="utf-8")
+    )
+    result = compose_overrides(DEFAULT_GCPNET_PRETRAIN_CONFIG_PATH, ())
+
+    assert result == raw
