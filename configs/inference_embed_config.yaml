@@ -1,17 +1,17 @@
-trained_model_dir: "path/to/trained_model"  # Directory where the trained model is saved
-checkpoint_path: "checkpoints/best_valid.pth"
-config_vqvae: "config_vqvae.yaml"
-config_encoder: "config_gcpnet_encoder.yaml"
-config_decoder: "config_geometric_decoder.yaml"
+trained_model_dir: "path/to/trained_model"  # Directory containing the trained model assets
+checkpoint_path: "checkpoints/best_valid.pth"  # Checkpoint file to restore before embedding
+config_vqvae: "config_vqvae.yaml"  # Path to the VQ-VAE training configuration
+config_encoder: "config_gcpnet_encoder.yaml"  # Encoder configuration to rebuild the model
+config_decoder: "config_geometric_decoder.yaml"  # Decoder configuration to rebuild the model
 
-data_path: "path/to/inference/h5/data"
-output_base_dir: "inference_embed_results"
+data_path: "path/to/inference/h5/data"  # HDF5 dataset providing sequences to encode
+output_base_dir: "inference_embed_results"  # Directory for stored embedding outputs
 
-batch_size: 16
-shuffle: True
-num_workers: 0
-max_task_samples: 5000000
-vq_embeddings_h5_filename: "vq_embed.h5"
-mixed_precision: "bf16"  # no, fp16, bf16, fp8
+batch_size: 16  # Number of sequences processed per embedding step
+shuffle: True  # Shuffle embedding dataset before iteration
+num_workers: 0  # Worker processes for the embedding dataloader
+max_task_samples: 5000000  # Limit on the total number of samples to embed
+vq_embeddings_h5_filename: "vq_embed.h5"  # Output filename for saved latent embeddings
+mixed_precision: "bf16"  # Mixed precision policy during embedding (options: no, fp16, bf16, fp8)
 
-tqdm_progress_bar: True
+tqdm_progress_bar: True  # Display tqdm progress bars while embedding

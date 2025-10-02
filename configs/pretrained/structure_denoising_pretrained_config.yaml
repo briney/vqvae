@@ -1,82 +1,82 @@
-features:
-  module: models.gcpnet.features.factory.ProteinFeaturiser
+features:  # Configuration for constructing protein featurisations
+  module: models.gcpnet.features.factory.ProteinFeaturiser  # Import path of the featuriser class
   kwargs:
-    representation: CA
+    representation: CA  # Atom representation to featurise (alpha carbon backbone)
     scalar_node_features:
-      - amino_acid_one_hot
-      - sequence_positional_encoding
-      - alpha
-      - kappa
-      - dihedrals
+      - amino_acid_one_hot  # 20-residue one-hot encoding for each position
+      - sequence_positional_encoding  # Sinusoidal encoding of sequence indices
+      - alpha  # Alpha torsion angle feature
+      - kappa  # Kappa pseudo dihedral angle feature
+      - dihedrals  # Backbone phi/psi dihedral feature set
     vector_node_features:
-      - orientation
+      - orientation  # Local backbone orientation vectors per residue
     edge_types:
-      - knn_16
+      - knn_16  # 16-nearest neighbour graph edges in 3D space
     scalar_edge_features:
-      - edge_distance
+      - edge_distance  # Euclidean distance feature for edges
     vector_edge_features:
-      - edge_vectors
+      - edge_vectors  # Direction vectors associated with each edge
 
-task:
-  transform: null
+task:  # Dataset-level task configuration
+  transform: null  # Optional structure transform to apply (null disables)
 
-encoder:
-  module: models.gcpnet.models.graph_encoders.gcpnet.GCPNetModel
+encoder:  # Model definition for the GCPNet encoder
+  module: models.gcpnet.models.graph_encoders.gcpnet.GCPNetModel  # Import path of the encoder module
   kwargs:
-    num_layers: 6
-    emb_dim: 128
-    node_s_emb_dim: 128
-    node_v_emb_dim: 16
-    edge_s_emb_dim: 32
-    edge_v_emb_dim: 4
-    r_max: 10.0
-    num_rbf: 8
-    activation: silu
-    pool: sum
+    num_layers: 6  # Number of GCPNet layers stacked in the encoder
+    emb_dim: 128  # Base hidden dimension for scalar representations
+    node_s_emb_dim: 128  # Hidden size for scalar node embeddings
+    node_v_emb_dim: 16  # Hidden size for vector node embeddings
+    edge_s_emb_dim: 32  # Hidden size for scalar edge embeddings
+    edge_v_emb_dim: 4  # Hidden size for vector edge embeddings
+    r_max: 10.0  # Cutoff radius (Å) for neighbour selection
+    num_rbf: 8  # Number of radial basis functions for distance encoding
+    activation: silu  # Non-linearity applied throughout the network
+    pool: sum  # Graph readout reduction strategy
     module_cfg:
-      norm_pos_diff: true
-      scalar_gate: 0
-      vector_gate: true
-      scalar_nonlinearity: silu
-      vector_nonlinearity: silu
+      norm_pos_diff: true  # Normalise positional differences inside the module
+      scalar_gate: 0  # Strength of scalar gating applied to vector features
+      vector_gate: true  # Enable learnable gating of vector channels
+      scalar_nonlinearity: silu  # Activation used on scalar streams
+      vector_nonlinearity: silu  # Activation used on vector streams
       nonlinearities:
-        - silu
-        - silu
-      r_max: 10.0
-      num_rbf: 8
-      bottleneck: 4
-      vector_linear: true
-      vector_identity: true
-      default_bottleneck: 4
-      predict_node_positions: false
-      predict_node_rep: true
-      node_positions_weight: 1.0
-      update_positions_with_vector_sum: false
-      enable_e3_equivariance: false
-      pool: sum
+        - silu  # Activation for message scalar component
+        - silu  # Activation for update scalar component
+      r_max: 10.0  # Maximum interaction radius enforced inside the block
+      num_rbf: 8  # Number of radial basis functions in module layers
+      bottleneck: 4  # Hidden dimension reduction factor in bottleneck blocks
+      vector_linear: true  # Use learned linear layer for vector updates
+      vector_identity: true  # Preserve residual identity mapping for vector channels
+      default_bottleneck: 4  # Default channel count for bottleneck branches
+      predict_node_positions: false  # Disable direct prediction of node coordinates
+      predict_node_rep: true  # Output refined node representations
+      node_positions_weight: 1.0  # Weight assigned to optional position loss term
+      update_positions_with_vector_sum: false  # Use vector sum updates for coordinates when enabled
+      enable_e3_equivariance: false  # Toggle full E(3)-equivariant mode
+      pool: sum  # Aggregation method for module-level pooling
     model_cfg:
-      h_input_dim: 49
-      chi_input_dim: 2
-      e_input_dim: 9
-      xi_input_dim: 1
-      h_hidden_dim: 128
-      chi_hidden_dim: 16
-      e_hidden_dim: 32
-      xi_hidden_dim: 4
-      num_layers: 6
-      dropout: 0.0
+      h_input_dim: 49  # Dimension of scalar node input features
+      chi_input_dim: 2  # Dimension of vector node input features
+      e_input_dim: 9  # Dimension of scalar edge input features
+      xi_input_dim: 1  # Dimension of vector edge input features
+      h_hidden_dim: 128  # Hidden dimension for scalar message passing states
+      chi_hidden_dim: 16  # Hidden dimension for vector message passing states
+      e_hidden_dim: 32  # Hidden dimension for scalar edge states
+      xi_hidden_dim: 4  # Hidden dimension for vector edge states
+      num_layers: 6  # Number of layers in the encoder stack
+      dropout: 0.0  # Dropout rate applied to scalar features
     layer_cfg:
-      pre_norm: false
-      use_gcp_norm: true
-      use_gcp_dropout: true
-      use_scalar_message_attention: true
-      num_feedforward_layers: 2
-      dropout: 0.0
-      nonlinearity_slope: 0.01
+      pre_norm: false  # Apply normalisation before message passing layers
+      use_gcp_norm: true  # Enable GCP-specific normalisation blocks
+      use_gcp_dropout: true  # Apply dropout within GCP layers
+      use_scalar_message_attention: true  # Activate attention on scalar messages
+      num_feedforward_layers: 2  # Feed-forward sublayer depth inside each block
+      dropout: 0.0  # Dropout rate for feed-forward sublayers
+      nonlinearity_slope: 0.01  # Slope parameter for leaky-type activations
       mp_cfg:
-        edge_encoder: false
-        edge_gate: false
-        num_message_layers: 4
-        message_residual: 0
-        message_ff_multiplier: 1
-        self_message: true
+        edge_encoder: false  # Use a dedicated edge encoder module when true
+        edge_gate: false  # Enable gating on edge messages
+        num_message_layers: 4  # Depth of message passing subnetwork
+        message_residual: 0  # Residual skip scaling applied within message function
+        message_ff_multiplier: 1  # Multiplier for message feed-forward width
+        self_message: true  # Allow self-messaging for nodes

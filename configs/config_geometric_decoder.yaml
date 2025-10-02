@@ -1,15 +1,15 @@
-dimension: 1024  # Used as dim_in and dim_out for ContinuousTransformerWrapper
-ff_mult: 4         # Multiplier for the feedforward dimension
-depth: 12      # Number of layers in the Encoder
-heads: 8      # Number of attention heads in the Encoder
-rotary_pos_emb: True
-attn_flash: True # FA-2 if installed
-attn_kv_heads: 2 # GQA
-qk_norm: True
-pre_norm: True
-residual_attn: False # Set pre_norm to False if residual_attn is True
-num_memory_tokens: 0 # Number of memory tokens, 0 means no memory tokens
-causal: False # Enable causal masking for autoregressive attention
+dimension: 1024  # Hidden dimensionality used for decoder transformer layers
+ff_mult: 4  # Multiplier controlling the feed-forward expansion ratio
+depth: 12  # Number of transformer blocks in the decoder stack
+heads: 8  # Attention head count per block in the decoder
+rotary_pos_emb: True  # Enable rotary positional embeddings within attention layers
+attn_flash: True  # Use FlashAttention kernels when available for speedups
+attn_kv_heads: 2  # Quantity of key/value heads for grouped-query attention
+qk_norm: True  # Apply layer normalisation to query and key projections
+pre_norm: True  # Use pre-layer normalisation architecture
+residual_attn: False  # Add extra residual attention pathway when enabled (requires pre_norm False)
+num_memory_tokens: 0  # Number of learned memory tokens appended to the sequence
+causal: False  # Disable causal masking to allow bidirectional attention
 
-direction_loss_bins: 16
-pos_scale_factor: 1.0
+direction_loss_bins: 16  # Discretisation bins for direction classification loss
+pos_scale_factor: 1.0  # Scaling factor applied to predicted coordinate deltas
