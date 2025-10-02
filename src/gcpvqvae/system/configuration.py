@@ -24,6 +24,11 @@ import yaml
 from gcpvqvae.models.gcpvqvae import GCPVQVAEConfig
 
 
+_CONFIG_DIR = Path(__file__).resolve().parents[1] / "configs"
+DEFAULT_TRAIN_CONFIG_PATH = _CONFIG_DIR / "base.yaml"
+DEFAULT_GCPNET_PRETRAIN_CONFIG_PATH = _CONFIG_DIR / "gcpnet_pretrain.yaml"
+
+
 def update_dataclass(instance: Any, updates: Dict[str, Any]) -> Any:
     """Recursively apply ``updates`` to a dataclass ``instance``."""
 
@@ -149,5 +154,11 @@ def compose_overrides(config_path: Path, overrides: Iterable[str]) -> Dict[str, 
     return cast(Dict[str, Any], container)
 
 
-__all__ = ["build_model_config", "compose_overrides", "update_dataclass"]
+__all__ = [
+    "build_model_config",
+    "compose_overrides",
+    "update_dataclass",
+    "DEFAULT_TRAIN_CONFIG_PATH",
+    "DEFAULT_GCPNET_PRETRAIN_CONFIG_PATH",
+]
 

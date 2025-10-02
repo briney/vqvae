@@ -7,7 +7,11 @@ from typing import Optional, Tuple
 
 import click
 
-from gcpvqvae.system.configuration import compose_overrides
+from gcpvqvae.system.configuration import (
+    DEFAULT_GCPNET_PRETRAIN_CONFIG_PATH,
+    DEFAULT_TRAIN_CONFIG_PATH,
+    compose_overrides,
+)
 
 try:  # Python 3.10+
     from importlib.metadata import PackageNotFoundError, version
@@ -120,28 +124,28 @@ def preprocess_dataset_command(
 
 @gpcvq.command(
     name="train",
-    short_help="Train a model from a YAML configuration file.",
+    short_help="Train a model using an optional YAML configuration file.",
     help=(
-        "Train a GCP-VQVAE model using the settings defined in CONFIG. "
-        "The configuration file should provide ``data``, ``model``, and ``train`` "
-        "sections as described in :mod:`gcpvqvae.system.train`.  Template files are "
-        "available under ``src/gcpvqvae/configs``.\n\n"
-        "Additional overrides can be supplied after CONFIG using Hydra's dotted "
-        "``key=value`` syntax."
+        "Train a GCP-VQVAE model. By default the command loads the settings from "
+        "the packaged ``base.yaml`` configuration.  Provide ``--config`` to use an "
+        "alternative file.  Additional overrides can be supplied using Hydra's "
+        "dotted ``key=value`` syntax."
     ),
 )
-@click.argument(
-    "config",
+@click.option(
+    "--config",
+    "config_path",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    metavar="CONFIG",
+    help="Path to a YAML configuration file (defaults to base.yaml).",
 )
 @click.argument("overrides", nargs=-1, metavar="[OVERRIDE]...", type=str)
-def train_command(config: Path, overrides: Tuple[str, ...]) -> None:
+def train_command(config_path: Optional[Path], overrides: Tuple[str, ...]) -> None:
     """Kick off model training with the provided configuration file."""
 
     from gcpvqvae.system.train import train as run_train
 
-    raw_config = compose_overrides(config, overrides)
+    config_source = config_path if config_path is not None else DEFAULT_TRAIN_CONFIG_PATH
+    raw_config = compose_overrides(config_source, overrides)
     run_train(raw_config)
 
 
@@ -149,23 +153,28 @@ def train_command(config: Path, overrides: Tuple[str, ...]) -> None:
     name="train-gpcnet",
     short_help="Pretrain the standalone GCPNet encoder.",
     help=(
-        "Run GCPNet pretraining using the configuration specified in CONFIG. "
-        "The configuration schema mirrors the full trainer but focuses on the "
-        "encoder and rigid reconstruction head."
+        "Run GCPNet pretraining.  The command defaults to the packaged "
+        "``gcpnet_pretrain.yaml`` configuration but accepts ``--config`` to specify "
+        "an alternative file.  Hydra-style overrides may be appended using "
+        "``key=value`` syntax."
     ),
 )
-@click.argument(
-    "config",
+@click.option(
+    "--config",
+    "config_path",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    metavar="CONFIG",
+    help="Path to a YAML configuration file (defaults to gcpnet_pretrain.yaml).",
 )
 @click.argument("overrides", nargs=-1, metavar="[OVERRIDE]...", type=str)
-def train_gpcnet_command(config: Path, overrides: Tuple[str, ...]) -> None:
+def train_gpcnet_command(config_path: Optional[Path], overrides: Tuple[str, ...]) -> None:
     """Launch GCPNet-only pretraining from the CLI."""
 
     from gcpvqvae.system.train_gcpnet import train as run_train_gcpnet
 
-    raw_config = compose_overrides(config, overrides)
+    config_source = (
+        config_path if config_path is not None else DEFAULT_GCPNET_PRETRAIN_CONFIG_PATH
+    )
+    raw_config = compose_overrides(config_source, overrides)
     run_train_gcpnet(raw_config)
 
 

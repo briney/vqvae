@@ -67,7 +67,7 @@ Starter templates live alongside that document.
 ```bash
 # Train using a configuration file in the repository
 # (adjust the path to point at your desired template)
-gpcvq train src/gcpvqvae/configs/base.yaml
+gpcvq train
 ```
 
 To train from a preprocessed dataset, point `data.root` at the directory
@@ -75,7 +75,7 @@ containing `preprocessed_dataset.json`. This can be done directly in the YAML
 file or via a command-line override:
 
 ```bash
-gpcvq train src/gcpvqvae/configs/base.yaml data.root=path/to/preprocessed
+gpcvq train data.root=path/to/preprocessed
 ```
 
 Any parameter can be overridden directly from the CLI using Hydra's dotted
@@ -83,7 +83,7 @@ syntax.  Append `section.key=value` pairs after the config path to tweak
 experiments without editing files:
 
 ```bash
-gpcvq train src/gcpvqvae/configs/small.yaml \
+gpcvq train --config src/gcpvqvae/configs/small.yaml \
     train.stages[0].batch_size=8 \
     model.vq.num_codes=128
 ```
@@ -91,12 +91,12 @@ gpcvq train src/gcpvqvae/configs/small.yaml \
 You can inspect the supported options with `gpcvq train --help`:
 
 ```text
-Usage: gpcvq train [OPTIONS] CONFIG
+Usage: gpcvq train [OPTIONS] [OVERRIDE]...
 
-  Train a GCP-VQVAE model using the settings defined in CONFIG. The
-  configuration file should provide ``data``, ``model``, and ``train``
-  sections as described in :mod:`gcpvqvae.system.train`. Template files are
-  available under ``src/gcpvqvae/configs``.
+  Train a GCP-VQVAE model. By default the command loads the settings from the
+  packaged ``base.yaml`` configuration. Provide ``--config`` to use an
+  alternative file. Additional overrides can be supplied using Hydra's dotted
+  ``key=value`` syntax.
 ```
 
 ### Pretraining the GCPNet encoder
@@ -104,11 +104,11 @@ Usage: gpcvq train [OPTIONS] CONFIG
 When you want to initialise the full model from a pretrained encoder, use the
 `train-gpcnet` subcommand. The schema mirrors the main trainer but omits the VQ
 and Transformer components so that only the GCPNet and rigid reconstruction head
-are optimised:
+are optimised. It defaults to the packaged `gcpnet_pretrain.yaml` file, but you
+can point to an alternative with `--config`:
 
 ```bash
-gpcvq train-gpcnet src/gcpvqvae/configs/gcpnet_pretrain.yaml \
-    data.root=path/to/backbones
+gpcvq train-gpcnet data.root=path/to/backbones
 ```
 
 The resulting checkpoints expose a `gcp_state` entry that can be referenced from
