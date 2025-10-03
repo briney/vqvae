@@ -65,60 +65,82 @@ def gpcvq() -> None:
     metavar="OUTPUT",
 )
 @click.option(
-    "--chain-id",
-    "chain_ids",
-    multiple=True,
-    help="Restrict preprocessing to specific chain identifiers.",
-)
-@click.option(
-    "--length-cap",
+    "--max-len",
     type=int,
-    default=2048,
-    show_default=True,
-    help="Maximum sequence length to load from the source data.",
+    metavar="N",
+    help="Discard chains longer than N residues.",
 )
 @click.option(
-    "--k",
+    "--min-len",
     type=int,
-    default=16,
-    show_default=True,
-    help="Number of nearest neighbours to use when computing geometric features.",
+    metavar="N",
+    help="Discard chains shorter than N residues.",
 )
 @click.option(
-    "--overwrite/--no-overwrite",
-    default=False,
-    show_default=True,
-    help="Overwrite OUTPUT if it already exists.",
+    "--max-workers",
+    type=int,
+    metavar="N",
+    help="Maximum worker processes to use while preprocessing.",
 )
 @click.option(
-    "--progress/--no-progress",
-    "show_progress",
-    default=True,
-    show_default=True,
-    help="Display progress while preprocessing.",
+    "--use-cif",
+    is_flag=True,
+    help="Treat INPUT as mmCIF data instead of the default PDB parsing.",
+)
+@click.option(
+    "--no-file-index",
+    is_flag=True,
+    help="Skip writing the auxiliary file index alongside OUTPUT.",
+)
+@click.option(
+    "--gap-threshold",
+    type=float,
+    metavar="Å",
+    help="Maximum residue-residue gap (in Å) before splitting chains.",
 )
 def preprocess_dataset_command(
     input: Path,
     output: Path,
-    chain_ids: Tuple[str, ...],
-    length_cap: int,
-    k: int,
-    overwrite: bool,
-    show_progress: bool,
+    max_len: Optional[int],
+    min_len: Optional[int],
+    max_workers: Optional[int],
+    use_cif: bool,
+    no_file_index: bool,
+    gap_threshold: Optional[float],
 ) -> None:
     """Preprocess raw backbone data for faster reuse."""
 
-    from gcpvqvae.data.preprocessing import preprocess_dataset
+    if max_len is not None and max_len <= 0:
+        raise click.ClickException("--max-len must be a positive integer.")
+    if min_len is not None and min_len <= 0:
+        raise click.ClickException("--min-len must be a positive integer.")
+    if (
+        max_len is not None
+        and min_len is not None
+        and min_len > max_len
+    ):
+        raise click.ClickException("--min-len cannot exceed --max-len.")
+    if max_workers is not None and max_workers <= 0:
+        raise click.ClickException("--max-workers must be a positive integer.")
+    if gap_threshold is not None and gap_threshold <= 0:
+        raise click.ClickException("--gap-threshold must be positive.")
 
-    manifest_path = preprocess_dataset(
-        input,
-        output,
-        chain_ids=chain_ids if chain_ids else None,
-        length_cap=length_cap,
-        k=k,
-        overwrite=overwrite,
-        progress=show_progress,
-    )
+    from gcpvqvae.data.reference_preprocessing import preprocess_reference_dataset
+
+    try:
+        manifest_path = preprocess_reference_dataset(
+            input,
+            output,
+            max_len=max_len,
+            min_len=min_len,
+            max_workers=max_workers,
+            use_cif=use_cif,
+            file_index=not no_file_index,
+            gap_threshold=gap_threshold,
+        )
+    except (OSError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+
     click.echo(f"Preprocessed dataset written to {manifest_path}")
 
 
