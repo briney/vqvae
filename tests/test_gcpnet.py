@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import torch
 
 from gcpvqvae.data.batch import EdgeStorage, ProteinBatch
@@ -11,7 +13,9 @@ from gcpvqvae.models.gcpnet import (
     GCPWidthConfig,
     ScalarVector,
 )
+from gcpvqvae.models.gcpvqvae import GCPVQVAE
 from gcpvqvae.system.train_gcpnet import _prepare_model_config
+from gcpvqvae.utils.checkpoint import load_checkpoint
 
 
 def test_gcpnet_encoder_projects_edge_scalars_with_default_input_dim() -> None:
@@ -132,3 +136,27 @@ def test_gcpnet_encoder_supports_bfloat16_inputs() -> None:
     assert outputs["node_embedding"].dtype is torch.bfloat16
     assert outputs["node_scalars"].dtype is torch.bfloat16
     assert outputs["node_vectors"].dtype is torch.bfloat16
+
+
+def test_gcpnet_reference_checkpoint_loads() -> None:
+    checkpoint_path = (
+        Path(__file__)
+        .resolve()
+        .parents[1]
+        / "models"
+        / "checkpoints"
+        / "structure_denoising"
+        / "gcpnet"
+        / "last.ckpt"
+    )
+
+    state = load_checkpoint(checkpoint_path, map_location="cpu")
+    state_dict = GCPVQVAE._extract_gcp_state_dict(state)
+
+    assert state_dict is not None
+    assert state_dict, "checkpoint should contain reference parameters"
+
+    encoder = GCPNetEncoder(GCPNetConfig())
+    model_state = encoder.state_dict()
+
+    assert isinstance(model_state, dict)
