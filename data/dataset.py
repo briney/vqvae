@@ -352,7 +352,11 @@ class GCPNetDataset(Dataset):
         if self.mode == 'train':
             random.shuffle(self.h5_samples)
 
-        self.h5_samples = self.h5_samples[:kwargs['configs'].train_settings.max_task_samples]
+        max_task_samples = getattr(
+            kwargs['configs'].train_settings, 'max_task_samples', None
+        )
+        if max_task_samples is not None:
+            self.h5_samples = self.h5_samples[:max_task_samples]
 
         self.top_k = top_k
         self.num_positional_embeddings = num_positional_embeddings

@@ -1,11 +1,11 @@
 fix_seed: 0  # Integer seed applied to NumPy and PyTorch for reproducible training runs
 checkpoints_every:
-  steps: null  # Interval in optimizer steps for writing checkpoints (overrides epochs when set)
-  epochs: 256  # Interval in epochs at which checkpoints are written to disk
+  steps: 20000  # Interval in optimizer steps for writing checkpoints (set to null to disable)
+  epochs: null  # Optional epoch-based checkpoint interval (overrides steps when provided)
 log:
   interval:
-    steps: null  # Interval in optimizer steps for aggregated logs (overrides epochs when set)
-    epochs: 1  # Interval in epochs for aggregated logs when step interval is not provided
+    steps: 500  # Interval in optimizer steps for aggregated logs (set to null to use epochs)
+    epochs: null  # Optional epoch-based logging interval used when steps is null
   wandb:
     enabled: False  # Enable logging scalars to Weights & Biases when True
     project: null  # WandB project name
@@ -87,22 +87,22 @@ model:  # Settings controlling model construction
 
 train_settings:  # Parameters that control the training loop
   data_path: ../../datasets/vqvae/uniref_50/  # Directory containing HDF5 training data
-  num_epochs: 32  # Total number of epochs to train for
-  num_steps: null  # Optional total number of optimizer steps to run; overrides num_epochs when provided
+  num_epochs: null  # Optional total number of epochs to train for (used when num_steps is null)
+  num_steps: 100000  # Total number of optimizer steps to run (set to null to rely on num_epochs instead)
   sample_weighting:  # Curriculum weighting on samples by sequence length
     enabled: True  # Turn dynamic sample weighting on or off
     min_weight: 1.0  # Minimum weight assigned to any training example
     max_weight: 4.0  # Maximum weight a long sequence can receive
     threshold_length: 384  # Sequence length from which weights start increasing
-  shuffle: False  # Shuffle dataset between epochs when True
+  shuffle: True  # Shuffle dataset between epochs when True
   mixed_precision: bf16  # Mixed precision policy passed to Accelerate (options: no, fp16, bf16, fp8)
   save_pdb_every:
-    steps: null  # Frequency in optimizer steps to export predicted structures (overrides epochs when set)
-    epochs: 8  # Frequency in epochs to export predicted structures as PDB files
+    steps: 5000  # Frequency in optimizer steps to export predicted structures (set null to use epochs)
+    epochs: null  # Optional frequency in epochs to export predicted structures as PDB files
   batch_size: 16  # Batch size per device before gradient accumulation
   num_workers: 8  # Number of worker processes for the training dataloader
   grad_accumulation: 1  # Gradient accumulation steps used to form an effective batch
-  max_task_samples: 200000  # Limit on how many samples to draw from the dataset per epoch
+  max_task_samples: null  # Optional limit on the number of samples loaded from disk
   profile_train_loop: False  # Enable PyTorch profiler around the training loop when debugging
   cutoff_augmentation:  # Randomly truncate sequences to shorter lengths
     enabled: False  # Activate cutoff augmentation when True
@@ -154,11 +154,11 @@ train_settings:  # Parameters that control the training loop
 valid_settings:  # Parameters for validation data loading and evaluation
   data_path: ../../datasets/vqvae/whole_validation_2048_h5/  # Directory containing validation HDF5 files
   do_every:
-    steps: null  # Run validation once every N optimizer steps when provided
-    epochs: 1  # Run validation once every N training epochs when steps is null
+    steps: 2000  # Run validation once every N optimizer steps (set to null to use epochs)
+    epochs: null  # Optional epoch-based validation frequency used when steps is null
   save_pdb_every:
-    steps: null  # Dump validation reconstructions every N validation steps when provided
-    epochs: 1  # Dump validation reconstructions as PDB files at this epoch interval
+    steps: 2000  # Dump validation reconstructions every N validation steps when provided
+    epochs: null  # Optional epoch-based interval for dumping validation reconstructions
   batch_size: 8  # Validation batch size per device
   num_workers: 0  # Number of worker processes for the validation dataloader
 

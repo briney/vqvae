@@ -157,7 +157,7 @@ def parse_interval(interval_config):
     Returns:
         tuple[str | None, int | None]: (mode, value) where mode is ``"steps"`` or
         ``"epochs"`` when configured. ``value`` is ``None`` when no valid interval is
-        provided.
+        provided. Bare integers are interpreted as step-based intervals.
     """
 
     if interval_config is None:
@@ -165,7 +165,7 @@ def parse_interval(interval_config):
 
     if isinstance(interval_config, Number):
         value = int(interval_config)
-        return ("epochs", value) if value > 0 else (None, None)
+        return ("steps", value) if value > 0 else (None, None)
 
     steps = _extract_interval_value(interval_config, "steps")
     epochs = _extract_interval_value(interval_config, "epochs")
@@ -713,11 +713,17 @@ def main(configs, raw_config, config_file_path):
             raise ValueError('train_settings.num_steps must be a positive integer when provided.')
         if accelerator.is_main_process:
             logging.info(
-                'Training duration configured for %s optimizer steps; this overrides num_epochs.',
+                'Training duration configured for %s optimizer steps; this overrides num_epochs when set.',
                 f'{max_steps:,}'
             )
 
-    total_epochs = int(getattr(configs.train_settings, 'num_epochs', 0))
+    total_epochs = getattr(configs.train_settings, 'num_epochs', None)
+    if total_epochs is not None:
+        total_epochs = int(total_epochs)
+        if total_epochs <= 0:
+            raise ValueError('train_settings.num_epochs must be a positive integer when provided.')
+    if max_steps is None and total_epochs is None:
+        raise ValueError('Configure either train_settings.num_steps or train_settings.num_epochs to run training.')
 
     # Maybe monitor resource usage during training.
     prof = None
@@ -752,8 +758,11 @@ def main(configs, raw_config, config_file_path):
     best_valid_metrics = {'gdtts': 0.0, 'mae': 1000.0, 'rmsd': 1000.0, 'lddt': 0.0, 'loss': 1000.0, 'tm_score': 0.0,
                           'perplexity': 1000.0}
     epoch = 0
+    reached_max_steps = False
     while True:
-        if max_steps is None and epoch >= total_epochs:
+        if total_epochs is not None and epoch >= total_epochs:
+            break
+        if max_steps is not None and reached_max_steps:
             break
         epoch += 1
         start_time = time.time()
@@ -891,13 +900,15 @@ def main(configs, raw_config, config_file_path):
                 logging.info(f'\tsaving the best models in {model_path}')
                 logging.info(f'\tbest valid rmsd: {best_valid_metrics["rmsd"]:.4f}')
 
-        if max_steps is not None and reached_max_steps:
-            if accelerator.is_main_process:
-                logging.info(
-                    'Reached the configured maximum number of training steps (%s); ending training loop.',
-                    f'{max_steps:,}'
-                )
-            break
+    if max_steps is not None and reached_max_steps:
+        if accelerator.is_main_process:
+            logging.info(
+                'Reached the configured maximum number of training steps (%s); ending training loop.',
+                f'{max_steps:,}'
+            )
+    elif total_epochs is not None and epoch >= total_epochs:
+        if accelerator.is_main_process:
+            logging.info('Completed the configured number of epochs (%s); ending training loop.', total_epochs)
 
     logging.info("Training is completed!\n")
 
