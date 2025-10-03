@@ -15,6 +15,12 @@ from gcpvqvae.data.mmcif import THREE_TO_ONE
 
 _BACKBONE_ATOMS: Tuple[str, ...] = ("N", "CA", "C", "O")
 
+# Missing-data thresholds applied during preprocessing.  AlphaFold structures
+# occasionally contain short unresolved segments; we accept those while
+# filtering chains with large gaps or pervasive missing coordinates.
+_MAX_MISSING_RATIO = 0.20
+_MAX_MISSING_BLOCK = 15
+
 
 @dataclass
 class PreprocessedChain:
@@ -36,6 +42,71 @@ class PreprocessedChain:
             raise ValueError("coords and plddt must have matching length")
         if len(self.protein_seq) != self.coords.shape[0]:
             raise ValueError("protein_seq length must match coordinate length")
+
+
+def _missing_mask(chain: PreprocessedChain) -> np.ndarray:
+    """Return a boolean mask marking residues without valid Cα positions."""
+
+    # Missing residues manifest either through explicit NaNs introduced when the
+    # raw residue lacked a backbone atom, or through gap padding when a jump in
+    # the residue numbering indicated an unresolved stretch.
+    ca_coords = chain.coords[:, 1, :]
+    return np.isnan(ca_coords).any(axis=1)
+
+
+def _longest_missing_block(mask: np.ndarray) -> int:
+    """Compute the maximum length of a contiguous missing segment."""
+
+    if mask.size == 0:
+        return 0
+
+    longest = 0
+    current = 0
+    for missing in mask:
+        if bool(missing):
+            current += 1
+            if current > longest:
+                longest = current
+        else:
+            current = 0
+    return longest
+
+
+def _validate_length(
+    length: int,
+    *,
+    min_len: Optional[int],
+    max_len: Optional[int],
+) -> Tuple[bool, Optional[str]]:
+    """Check whether a chain length satisfies the configured bounds."""
+
+    if min_len is not None and length < min_len:
+        return False, "chains_too_short"
+    if max_len is not None and length > max_len:
+        return False, "chains_too_long"
+    return True, None
+
+
+def _validate_missing_thresholds(
+    chain: PreprocessedChain,
+    *,
+    max_missing_ratio: float = _MAX_MISSING_RATIO,
+    max_missing_block: int = _MAX_MISSING_BLOCK,
+) -> Tuple[bool, Optional[str], float, int]:
+    """Validate missing-coordinate statistics after gap padding."""
+
+    mask = _missing_mask(chain)
+    if mask.size == 0:
+        return True, None, 0.0, 0
+
+    missing_ratio = float(mask.mean())
+    longest_block = _longest_missing_block(mask)
+
+    if missing_ratio > max_missing_ratio:
+        return False, "missing_ratio_exceeded", missing_ratio, longest_block
+    if longest_block > max_missing_block:
+        return False, "missing_block_exceeded", missing_ratio, longest_block
+    return True, None, missing_ratio, longest_block
 
 
 def _load_structure(path: Path) -> gemmi.Structure:
