@@ -234,7 +234,7 @@ class GCPVQVAE(nn.Module):
         batch_size, max_len, _ = batch["node_scalars"].shape
 
         gcp_out = self.encoder_gcp(proto)
-        flat_embeddings = gcp_out["embeddings"]
+        flat_embeddings = gcp_out["node_embedding"]
         latent_dim = flat_embeddings.shape[-1]
         padded = flat_embeddings.new_zeros((batch_size * max_len, latent_dim))
         padded.index_copy_(0, proto.valid_indices, flat_embeddings)
@@ -336,7 +336,7 @@ class GCPVQVAE(nn.Module):
         proto.max_length = node_scalars.shape[0]
         proto = proto.to(device=device, dtype=dtype)
         gcp_out = self.encoder_gcp(proto)
-        embeddings = gcp_out["embeddings"].unsqueeze(0)
+        embeddings = gcp_out["node_embedding"].unsqueeze(0)
         projected = self._project_embeddings(embeddings)
         enc_hidden = self.encoder_transformer(projected, mask=mask.unsqueeze(0))
         quantized, indices, vq_losses = self.vq(enc_hidden, mask=mask.unsqueeze(0))

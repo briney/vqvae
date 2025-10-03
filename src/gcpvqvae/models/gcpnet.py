@@ -10,7 +10,7 @@ from torch import Tensor, nn
 
 from .gcpcore import scalarize, safe_norm, vector_linear, vectorize
 from gcpvqvae.data.batch import EdgeStorage, ProteinBatch
-from gcpvqvae.geometry.ops import centralize, ensure_edge_frames, localize
+from gcpvqvae.geometry.ops import centralize, decentralize, ensure_edge_frames, localize
 
 
 # Default number of scalar edge features produced by the featurisation pipeline.
@@ -688,6 +688,7 @@ class GCPNetConfig:
     node_inputs: bool = True
     predict_node_positions: bool = False
     predict_node_rep: bool = False
+    readout_pooling: str = "sum"
     use_gcp_dropout: bool = True
     norm_pos_diff: bool = False
     prenorm: bool = True
@@ -717,6 +718,10 @@ class GCPNetConfig:
             raise ValueError("embedding.output.scalar must match message_passing.width.scalar")
         if self.embedding.output.vector != self.message_passing.width.vector:
             raise ValueError("embedding.output.vector must match message_passing.width.vector")
+
+        valid_pool = {"sum", "mean"}
+        if self.readout_pooling not in valid_pool:
+            raise ValueError(f"readout_pooling must be one of {sorted(valid_pool)}")
 
         if self.embedding.node_scalar_dim <= 0:
             raise ValueError("embedding.node_scalar_dim must be positive")
@@ -951,6 +956,33 @@ class GCPNetEncoder(nn.Module):
             nn.LayerNorm(readout_dim),
             nn.Linear(readout_dim, self.config.latent_dim, bias=False),
         )
+        self.node_rep_dim = 128
+        if self.config.predict_node_rep:
+            self.node_projection_norm = GCPLayerNorm(
+                self.config.hidden_scalar_dim,
+                self.config.hidden_vector_dim,
+            )
+            self.node_projection_linear = nn.Linear(
+                self.config.hidden_scalar_dim,
+                self.node_rep_dim,
+                bias=False,
+            )
+            self.node_projection = GCPConv(
+                self.node_rep_dim,
+                0,
+                edge_scalar_dim=self.config.edge_scalar_dim,
+                edge_vector_channels=self.config.edge_vector_dim,
+                hidden_scalar_dim=self.config.feed_forward_scalar_dim,
+                hidden_vector_channels=0,
+                dropout=0.0,
+                vector_gate=False,
+                enable_e3_equivariance=self.config.enable_e3_equivariance,
+                node_inputs=self.config.node_inputs,
+            )
+        else:
+            self.node_projection_norm = None
+            self.node_projection_linear = None
+            self.node_projection = None
 
     def _prepare_edges(
         self,
@@ -978,7 +1010,9 @@ class GCPNetEncoder(nn.Module):
         batch.edge_frames = frames
         return edges, frames
 
-    def forward(self, batch: ProteinBatch) -> Dict[str, Union[Tensor, ProteinBatch]]:
+    def forward(
+        self, batch: ProteinBatch
+    ) -> Dict[str, Union[Tensor, ProteinBatch, Dict[str, EdgeStorage]]]:
         if not isinstance(batch, ProteinBatch):
             raise TypeError("GCPNetEncoder.forward expects a ProteinBatch")
 
@@ -994,6 +1028,7 @@ class GCPNetEncoder(nn.Module):
         batch.xi_raw = batch.xi.clone()
         centered_positions, centroids = centralize(batch.xi, batch.batch, mask=mask)
         batch.xi = centered_positions
+        batch.xi_centered = centered_positions
         batch.centroids = centroids
 
         edges, frames = self._prepare_edges(batch, mask)
@@ -1030,15 +1065,90 @@ class GCPNetEncoder(nn.Module):
         vec_norms = safe_norm(node_features.vectors, dim=-1)
         readout_input = torch.cat((node_features.scalars, vec_norms.to(node_features.scalars.dtype)), dim=-1)
         readout_dtype = self.readout[1].weight.dtype
-        embeddings = self.readout(readout_input.to(readout_dtype)).to(node_features.scalars.dtype)
+        node_embedding = self.readout(readout_input.to(readout_dtype)).to(node_features.scalars.dtype)
 
-        output: Dict[str, Union[Tensor, ProteinBatch]] = {
-            "embeddings": embeddings,
+        if self.config.predict_node_rep and self.node_projection is not None:
+            norm_features = self.node_projection_norm(node_features) if self.node_projection_norm is not None else node_features
+            proj_dtype = self.node_projection_linear.weight.dtype if self.node_projection_linear is not None else norm_features.scalars.dtype
+            projected_scalars = (
+                self.node_projection_linear(norm_features.scalars.to(proj_dtype)).to(norm_features.scalars.dtype)
+                if self.node_projection_linear is not None
+                else norm_features.scalars
+            )
+            zero_vectors = norm_features.vectors.new_zeros((norm_features.vectors.size(0), 0, 3))
+            projection_input = ScalarVector(projected_scalars, zero_vectors)
+            projected_features = self.node_projection(
+                projection_input,
+                edge_features,
+                edges.edge_index,
+                frames,
+                mask=mask,
+            )
+            node_embedding = projected_features.scalars
+
+        num_nodes = node_embedding.shape[0]
+        num_graphs = batch.num_graphs()
+        compute_dtype = (
+            torch.float32
+            if node_embedding.dtype in {torch.float16, torch.bfloat16}
+            else node_embedding.dtype
+        )
+        contribution = node_embedding.to(compute_dtype)
+        if mask is not None:
+            node_mask = mask.to(dtype=compute_dtype).unsqueeze(-1)
+            contribution = contribution * node_mask
+            count_src = node_mask
+        else:
+            count_src = contribution.new_ones((num_nodes, 1))
+
+        graph_embedding = contribution.new_zeros((num_graphs, contribution.shape[-1]))
+        if num_nodes > 0 and num_graphs > 0:
+            graph_embedding.index_add_(0, batch.batch, contribution)
+        counts = contribution.new_zeros((num_graphs, 1))
+        if num_nodes > 0 and num_graphs > 0:
+            counts.index_add_(0, batch.batch, count_src)
+        if self.config.readout_pooling == "mean" and num_graphs > 0:
+            graph_embedding = graph_embedding / torch.clamp(counts, min=1.0)
+        graph_embedding = graph_embedding.to(node_embedding.dtype)
+
+        pos: Optional[Tensor] = None
+        if self.config.predict_node_positions:
+            displacement = displacements
+            if displacement is None:
+                displacement = batch.xi.new_zeros((batch.xi.shape[0], 3))
+            if mask is not None:
+                displacement = displacement * mask.unsqueeze(-1).to(displacement.dtype)
+            centered = batch.xi + displacement
+            absolute = decentralize(centered, batch.centroids, batch.batch)
+            batch.xi_centered = centered
+            batch.xi = absolute
+            pos = absolute
+            frames = ensure_edge_frames(
+                batch.xi,
+                edges.edge_index,
+                edge_batch=edges.batch,
+                node_batch=batch.batch,
+                mask=mask,
+            )
+            edges.frames = frames
+            batch.edge_frames = frames
+        else:
+            pos = None
+
+        output: Dict[str, Union[Tensor, ProteinBatch, Dict[str, EdgeStorage]]] = {
+            "node_embedding": node_embedding,
+            "graph_embedding": graph_embedding,
             "node_scalars": node_features.scalars,
             "node_vectors": node_features.vectors,
             "batch": batch,
+            "h": batch.h,
+            "chi": batch.chi,
+            "e": batch.e,
+            "xi": batch.xi,
         }
 
+        if pos is not None:
+            output["pos"] = pos
         if displacements is not None:
             output["displacement"] = displacements
 
