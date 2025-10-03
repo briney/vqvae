@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, Optional, Tuple, Union
 
 import torch
@@ -150,6 +150,33 @@ class GCPDropout(nn.Module):
         return ScalarVector(scalars, vectors)
 
 
+class IdentityGCPDropout(nn.Module):
+    """No-op replacement for :class:`GCPDropout`."""
+
+    def forward(self, features: ScalarVector) -> ScalarVector:  # pragma: no cover - simple passthrough
+        return features
+
+
+class StandardGCPDropout(nn.Module):
+    """Fallback dropout that treats scalar/vector components independently."""
+
+    def __init__(self, p: float) -> None:
+        super().__init__()
+        self.scalar = nn.Dropout(p) if p > 0.0 else None
+        self.vector = nn.Dropout(p) if p > 0.0 else None
+
+    def forward(self, features: ScalarVector) -> ScalarVector:
+        scalars = features.scalars
+        vectors = features.vectors
+        if self.scalar is not None:
+            scalars = self.scalar(scalars)
+        if self.vector is not None and vectors.numel() > 0:
+            shape = vectors.shape
+            dropped = self.vector(vectors.view(shape[0], -1))
+            vectors = dropped.view(shape)
+        return ScalarVector(scalars, vectors)
+
+
 class GCPEmbedding(nn.Module):
     """Project raw node and edge features to the working feature spaces."""
 
@@ -157,20 +184,30 @@ class GCPEmbedding(nn.Module):
         super().__init__()
 
         self.config = config
+        embedding_cfg = config.embedding
+        output_scalar = embedding_cfg.output.scalar
+        output_vector = embedding_cfg.output.vector
+        if output_scalar is None or output_vector is None:
+            raise ValueError("Embedding output widths must be initialised before encoder construction")
+
         self.edge_scalar_in_dim = (
-            config.edge_scalar_input_dim if config.edge_scalar_input_dim is not None else config.edge_scalar_dim
+            embedding_cfg.edge_scalar_input_dim
+            if embedding_cfg.edge_scalar_input_dim is not None
+            else embedding_cfg.edge_scalar_dim
         )
         self.edge_vector_in_dim = (
-            config.edge_vector_input_dim if config.edge_vector_input_dim is not None else config.edge_vector_dim
+            embedding_cfg.edge_vector_input_dim
+            if embedding_cfg.edge_vector_input_dim is not None
+            else embedding_cfg.edge_vector_dim
         )
 
         self.node_scalar_proj = nn.Linear(
-            config.node_scalar_dim,
-            config.hidden_scalar_dim,
+            embedding_cfg.node_scalar_dim,
+            output_scalar,
             bias=False,
         )
         self.node_vector_proj = nn.Parameter(
-            torch.randn(config.hidden_vector_dim, config.node_vector_dim) * 0.02
+            torch.randn(output_vector, embedding_cfg.node_vector_dim) * 0.02
         )
 
         self.num_rbf = 16
@@ -180,11 +217,11 @@ class GCPEmbedding(nn.Module):
 
         self.edge_scalar_proj = nn.Linear(
             self.edge_scalar_in_dim + self.num_rbf,
-            config.edge_scalar_dim,
+            embedding_cfg.edge_scalar_dim,
             bias=False,
         )
         self.edge_vector_proj = nn.Parameter(
-            torch.randn(config.edge_vector_dim, self.edge_vector_in_dim) * 0.02
+            torch.randn(embedding_cfg.edge_vector_dim, self.edge_vector_in_dim) * 0.02
         )
 
     def _gaussian_rbf(self, distances: Tensor) -> Tensor:
@@ -468,8 +505,17 @@ class GCPMessagePassing(nn.Module):
         edge_scalar_dim = config.edge_scalar_dim
         edge_vector_dim = config.edge_vector_dim
 
-        bottleneck_scalar = max(1, scalar_dim // 2)
-        bottleneck_vector = max(1, vector_dim // 2)
+        mp_cfg = config.message_passing
+        if mp_cfg.scalar_bottleneck_factor > 0.0:
+            bottleneck_scalar = max(1, int(round(scalar_dim * mp_cfg.scalar_bottleneck_factor)))
+        else:
+            bottleneck_scalar = scalar_dim
+        if mp_cfg.vector_bottleneck_factor > 0.0:
+            bottleneck_vector = max(1, int(round(vector_dim * mp_cfg.vector_bottleneck_factor)))
+        else:
+            bottleneck_vector = vector_dim
+
+        self.pooling = mp_cfg.pooling
 
         self.layers = nn.ModuleList(
             [
@@ -555,12 +601,16 @@ class GCPMessagePassing(nn.Module):
 
         scalar_input = features.scalars.to(compute_dtype)
         agg_scalars = torch.sparse.mm(adjacency, scalar_input)
-        agg_scalars = (agg_scalars / degree).to(dtype)
+        if self.pooling == "mean":
+            agg_scalars = agg_scalars / degree
+        agg_scalars = agg_scalars.to(dtype)
 
         vector_shape = features.vectors.shape
         vectors_flat = features.vectors.reshape(num_nodes, -1).to(compute_dtype)
         agg_vectors_flat = torch.sparse.mm(adjacency, vectors_flat)
-        agg_vectors_flat = (agg_vectors_flat / degree).to(features.vectors.dtype)
+        if self.pooling == "mean":
+            agg_vectors_flat = agg_vectors_flat / degree
+        agg_vectors_flat = agg_vectors_flat.to(features.vectors.dtype)
         agg_vectors = agg_vectors_flat.view(vector_shape)
 
         if mask is not None:
@@ -588,26 +638,165 @@ class GCPMessagePassing(nn.Module):
 
 
 @dataclass
-class GCPNetConfig:
-    node_scalar_dim: int = 6
-    node_vector_dim: int = 3
-    edge_scalar_dim: int = 32
+class GCPWidthConfig:
+    """Scalar/vector width pair used across the encoder."""
+
+    scalar: Optional[int] = None
+    vector: Optional[int] = None
+
+
+@dataclass
+class GCPEmbeddingConfig:
+    """Input and projection dimensions for the embedding stage."""
+
+    node_scalar_dim: int = 49
+    node_vector_dim: int = 2
+    edge_scalar_dim: int = 9
     edge_scalar_input_dim: Optional[int] = DEFAULT_EDGE_SCALAR_INPUT_DIM
-    edge_vector_dim: int = 4
+    edge_vector_dim: int = 1
     edge_vector_input_dim: Optional[int] = 1
-    hidden_scalar_dim: int = 128
-    hidden_vector_dim: int = 16
-    latent_dim: int = 256
-    layers: int = 6
+    output: GCPWidthConfig = field(default_factory=GCPWidthConfig)
+
+
+@dataclass
+class GCPMessagePassingConfig:
+    """Widths and aggregation behaviour for message passing blocks."""
+
+    width: GCPWidthConfig = field(default_factory=lambda: GCPWidthConfig(scalar=128, vector=16))
+    scalar_bottleneck_factor: float = 0.5
+    vector_bottleneck_factor: float = 0.5
+    pooling: str = "mean"
+
+
+@dataclass
+class GCPFeedForwardConfig:
+    """Hidden widths inside the residual feed-forward stack."""
+
+    width: GCPWidthConfig = field(default_factory=GCPWidthConfig)
+
+
+@dataclass
+class GCPNetConfig:
+    embedding: GCPEmbeddingConfig = field(default_factory=GCPEmbeddingConfig)
+    message_passing: GCPMessagePassingConfig = field(default_factory=GCPMessagePassingConfig)
+    feed_forward: GCPFeedForwardConfig = field(default_factory=GCPFeedForwardConfig)
+    latent_dim: int = 128
+    num_layers: int = 6
     dropout: float = 0.0
     vector_gate: bool = True
     enable_e3_equivariance: bool = True
     node_inputs: bool = True
-    displacement_head: bool = False
+    predict_node_positions: bool = False
+    predict_node_rep: bool = False
+    use_gcp_dropout: bool = True
+    norm_pos_diff: bool = False
     prenorm: bool = True
     init: str = "random"
     init_checkpoint: Optional[str] = None
     strict_init: bool = True
+
+    def __post_init__(self) -> None:
+        if self.message_passing.width.scalar is None:
+            self.message_passing.width.scalar = 128
+        if self.message_passing.width.vector is None:
+            self.message_passing.width.vector = 16
+        if self.embedding.output.scalar is None:
+            self.embedding.output.scalar = self.message_passing.width.scalar
+        if self.embedding.output.vector is None:
+            self.embedding.output.vector = self.message_passing.width.vector
+        if self.feed_forward.width.scalar is None:
+            self.feed_forward.width.scalar = self.message_passing.width.scalar * 2
+        if self.feed_forward.width.vector is None:
+            self.feed_forward.width.vector = self.message_passing.width.vector
+        if self.embedding.edge_scalar_input_dim is None:
+            self.embedding.edge_scalar_input_dim = self.embedding.edge_scalar_dim
+        if self.embedding.edge_vector_input_dim is None:
+            self.embedding.edge_vector_input_dim = self.embedding.edge_vector_dim
+
+        if self.embedding.output.scalar != self.message_passing.width.scalar:
+            raise ValueError("embedding.output.scalar must match message_passing.width.scalar")
+        if self.embedding.output.vector != self.message_passing.width.vector:
+            raise ValueError("embedding.output.vector must match message_passing.width.vector")
+
+        if self.embedding.node_scalar_dim <= 0:
+            raise ValueError("embedding.node_scalar_dim must be positive")
+        if self.embedding.node_vector_dim <= 0:
+            raise ValueError("embedding.node_vector_dim must be positive")
+        if self.embedding.edge_scalar_dim <= 0:
+            raise ValueError("embedding.edge_scalar_dim must be positive")
+        if self.embedding.edge_vector_dim <= 0:
+            raise ValueError("embedding.edge_vector_dim must be positive")
+        if self.embedding.output.scalar is None or self.embedding.output.scalar <= 0:
+            raise ValueError("embedding.output.scalar must be a positive integer")
+        if self.embedding.output.vector is None or self.embedding.output.vector <= 0:
+            raise ValueError("embedding.output.vector must be a positive integer")
+        if self.message_passing.width.scalar is None or self.message_passing.width.scalar <= 0:
+            raise ValueError("message_passing.width.scalar must be a positive integer")
+        if self.message_passing.width.vector is None or self.message_passing.width.vector <= 0:
+            raise ValueError("message_passing.width.vector must be a positive integer")
+        if self.feed_forward.width.scalar is None or self.feed_forward.width.scalar <= 0:
+            raise ValueError("feed_forward.width.scalar must be a positive integer")
+        if self.feed_forward.width.vector is None or self.feed_forward.width.vector <= 0:
+            raise ValueError("feed_forward.width.vector must be a positive integer")
+        if self.latent_dim <= 0:
+            raise ValueError("latent_dim must be positive")
+        if self.num_layers <= 0:
+            raise ValueError("num_layers must be positive")
+
+        pooling = self.message_passing.pooling.lower()
+        if pooling not in {"mean", "sum"}:
+            raise ValueError("message_passing.pooling must be either 'mean' or 'sum'")
+        self.message_passing.pooling = pooling
+
+    @property
+    def node_scalar_dim(self) -> int:
+        return self.embedding.node_scalar_dim
+
+    @property
+    def node_vector_dim(self) -> int:
+        return self.embedding.node_vector_dim
+
+    @property
+    def edge_scalar_dim(self) -> int:
+        return self.embedding.edge_scalar_dim
+
+    @property
+    def edge_scalar_input_dim(self) -> int:
+        value = self.embedding.edge_scalar_input_dim
+        return value if value is not None else self.embedding.edge_scalar_dim
+
+    @property
+    def edge_vector_dim(self) -> int:
+        return self.embedding.edge_vector_dim
+
+    @property
+    def edge_vector_input_dim(self) -> int:
+        value = self.embedding.edge_vector_input_dim
+        return value if value is not None else self.embedding.edge_vector_dim
+
+    @property
+    def hidden_scalar_dim(self) -> int:
+        assert self.message_passing.width.scalar is not None
+        return self.message_passing.width.scalar
+
+    @property
+    def hidden_vector_dim(self) -> int:
+        assert self.message_passing.width.vector is not None
+        return self.message_passing.width.vector
+
+    @property
+    def feed_forward_scalar_dim(self) -> int:
+        assert self.feed_forward.width.scalar is not None
+        return self.feed_forward.width.scalar
+
+    @property
+    def feed_forward_vector_dim(self) -> int:
+        assert self.feed_forward.width.vector is not None
+        return self.feed_forward.width.vector
+
+    @property
+    def layers(self) -> int:
+        return self.num_layers
 
 
 class GCPInteractions(nn.Module):
@@ -625,7 +814,13 @@ class GCPInteractions(nn.Module):
         ) if self.prenorm else None
 
         self.message_passing = GCPMessagePassing(config)
-        self.residual_dropout = GCPDropout(config.dropout)
+        if config.dropout > 0.0:
+            if config.use_gcp_dropout:
+                self.residual_dropout: nn.Module = GCPDropout(config.dropout)
+            else:
+                self.residual_dropout = StandardGCPDropout(config.dropout)
+        else:
+            self.residual_dropout = IdentityGCPDropout()
 
         self.skip_proj = nn.Linear(config.hidden_scalar_dim * 2, config.hidden_scalar_dim, bias=False)
         self.skip_vector_proj = nn.Parameter(
@@ -639,8 +834,8 @@ class GCPInteractions(nn.Module):
                     config.hidden_vector_dim,
                     edge_scalar_dim=config.edge_scalar_dim,
                     edge_vector_channels=config.edge_vector_dim,
-                    hidden_scalar_dim=config.hidden_scalar_dim * 2,
-                    hidden_vector_channels=config.hidden_vector_dim,
+                    hidden_scalar_dim=config.feed_forward_scalar_dim,
+                    hidden_vector_channels=config.feed_forward_vector_dim,
                     dropout=config.dropout,
                     vector_gate=config.vector_gate,
                     enable_e3_equivariance=config.enable_e3_equivariance,
@@ -651,8 +846,8 @@ class GCPInteractions(nn.Module):
                     config.hidden_vector_dim,
                     edge_scalar_dim=config.edge_scalar_dim,
                     edge_vector_channels=config.edge_vector_dim,
-                    hidden_scalar_dim=config.hidden_scalar_dim * 2,
-                    hidden_vector_channels=config.hidden_vector_dim,
+                    hidden_scalar_dim=config.feed_forward_scalar_dim,
+                    hidden_vector_channels=config.feed_forward_vector_dim,
                     dropout=config.dropout,
                     vector_gate=config.vector_gate,
                     enable_e3_equivariance=config.enable_e3_equivariance,
@@ -661,9 +856,15 @@ class GCPInteractions(nn.Module):
             ]
         )
 
-        self.feedforward_dropout = GCPDropout(config.dropout)
+        if config.dropout > 0.0:
+            if config.use_gcp_dropout:
+                self.feedforward_dropout: nn.Module = GCPDropout(config.dropout)
+            else:
+                self.feedforward_dropout = StandardGCPDropout(config.dropout)
+        else:
+            self.feedforward_dropout = IdentityGCPDropout()
 
-        if config.displacement_head:
+        if config.predict_node_positions:
             self.node_position_head = nn.Linear(config.hidden_scalar_dim, 3, bias=False)
         else:
             self.node_position_head = None
@@ -734,13 +935,13 @@ class GCPNetEncoder(nn.Module):
 
         self.config = config or GCPNetConfig()
 
-        if self.config.edge_scalar_input_dim is None:
-            self.config.edge_scalar_input_dim = self.config.edge_scalar_dim
-        if self.config.edge_vector_input_dim is None:
-            self.config.edge_vector_input_dim = self.config.edge_vector_dim
+        if self.config.embedding.edge_scalar_input_dim is None:
+            self.config.embedding.edge_scalar_input_dim = self.config.embedding.edge_scalar_dim
+        if self.config.embedding.edge_vector_input_dim is None:
+            self.config.embedding.edge_vector_input_dim = self.config.embedding.edge_vector_dim
 
         self.embedding = GCPEmbedding(self.config)
-        num_layers = self.config.layers if self.config.layers is not None else 6
+        num_layers = self.config.num_layers
         self.interactions = nn.ModuleList(
             [GCPInteractions(self.config) for _ in range(num_layers)]
         )
@@ -847,6 +1048,10 @@ class GCPNetEncoder(nn.Module):
 __all__ = [
     "GCPNetEncoder",
     "GCPNetConfig",
+    "GCPWidthConfig",
+    "GCPEmbeddingConfig",
+    "GCPMessagePassingConfig",
+    "GCPFeedForwardConfig",
     "GCPConv",
     "GCPLayerNorm",
     "GCPDropout",

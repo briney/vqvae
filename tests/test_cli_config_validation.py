@@ -23,12 +23,17 @@ def _base_config() -> dict:
         },
         "model": {
             "gcp": {
-                "hidden_scalar_dim": 32,
-                "hidden_vector_dim": 8,
-                "edge_scalar_dim": 4,
-                "edge_vector_dim": 1,
+                "embedding": {
+                    "node_scalar_dim": 6,
+                    "node_vector_dim": 3,
+                    "edge_scalar_dim": 4,
+                    "edge_vector_dim": 1,
+                    "output": {"scalar": 32, "vector": 8},
+                },
+                "message_passing": {"width": {"scalar": 32, "vector": 8}},
+                "feed_forward": {"width": {"scalar": 64, "vector": 8}},
                 "latent_dim": 64,
-                "layers": 2,
+                "num_layers": 2,
             },
             "vq": {
                 "num_codes": 32,
