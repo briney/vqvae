@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Dict, Optional, Union
 
 import torch
 from torch import Tensor, nn
 
 from .gcpcore import apply_gating, safe_norm, vector_linear
+from gcpvqvae.data.batch import EdgeStorage, ProteinBatch
+from gcpvqvae.geometry.ops import centralize, ensure_edge_frames, localize
 
 
 # Default number of scalar edge features produced by the featurisation pipeline.
@@ -287,38 +289,67 @@ class GCPNetEncoder(nn.Module):
         else:
             self.displacement_head = None
 
-    def forward(
-        self,
-        node_scalars: Tensor,
-        node_vectors: Tensor,
-        edge_index: Tensor,
-        edge_scalars: Tensor,
-        edge_vectors: Tensor,
-        edge_frames: Tensor,
-        *,
-        mask: Optional[Tensor] = None,
-    ) -> Dict[str, Tensor]:
-        if node_scalars.ndim != 2:
-            raise ValueError("node_scalars must have shape (N, F)")
-        if node_vectors.ndim != 3:
-            raise ValueError("node_vectors must have shape (N, C, 3)")
+    def forward(self, batch: ProteinBatch) -> Dict[str, Union[Tensor, ProteinBatch]]:
+        if not isinstance(batch, ProteinBatch):
+            raise TypeError("GCPNetEncoder.forward expects a ProteinBatch")
 
-        scalar_proj_dtype = self.scalar_proj.weight.dtype
-        scalars = self.scalar_proj(node_scalars.to(scalar_proj_dtype)).to(node_scalars.dtype)
-        vectors = vector_linear(node_vectors, self.vector_proj).to(node_vectors.dtype)
+        node_scalars = batch.h
+        node_vectors = batch.chi
+        if node_scalars.ndim != 2:
+            raise ValueError("ProteinBatch.h must have shape (N, F)")
+        if node_vectors.ndim != 3:
+            raise ValueError("ProteinBatch.chi must have shape (N, C, 3)")
+
+        mask = batch.mask.to(torch.bool) if batch.mask is not None else None
+
+        batch.xi_raw = batch.xi.clone()
+        centered_positions, centroids = centralize(batch.xi, batch.batch, mask=mask)
+        batch.xi = centered_positions
+        batch.centroids = centroids
+
+        edges: EdgeStorage
+        if isinstance(batch.e, dict):
+            knn_keys = [name for name in batch.e if name.startswith("knn")]
+            if len(knn_keys) != 1:
+                raise ValueError("ProteinBatch must contain exactly one knn relation")
+            edges = batch.e[knn_keys[0]]
+        else:
+            raise ValueError("ProteinBatch.e must be a mapping of edge relations")
+
+        frames = edges.frames
+        if frames is None or frames.shape[0] != edges.edge_index.shape[1]:
+            frames = ensure_edge_frames(
+                batch.xi,
+                edges.edge_index,
+                edge_batch=edges.batch,
+                node_batch=batch.batch,
+                mask=mask,
+            )
+            edges.frames = frames
+        batch.edge_frames = frames
+
+        edge_vectors = edges.vectors
+        if edge_vectors.ndim == 2:
+            edge_vectors = edge_vectors.unsqueeze(1)
+        edge_vectors = localize(edge_vectors, frames).to(node_vectors.dtype)
+
+        node_scalar_dtype = self.scalar_proj.weight.dtype
+        scalars = self.scalar_proj(node_scalars.to(node_scalar_dtype)).to(batch.h.dtype)
+        vectors = vector_linear(node_vectors, self.vector_proj).to(batch.chi.dtype)
 
         if mask is not None:
-            mask = mask.to(torch.bool)
             scalars = scalars * mask.unsqueeze(-1)
             vectors = vectors * mask.unsqueeze(-1).unsqueeze(-1)
 
-        if self.edge_scalar_proj is not None and edge_scalars.numel():
-            proj_dtype = self.edge_scalar_proj.weight.dtype
-            edge_scalars_projected = self.edge_scalar_proj(edge_scalars.to(proj_dtype)).to(edge_scalars.dtype)
-        elif self.edge_scalar_proj is not None:
-            edge_scalars_projected = edge_scalars.new_zeros(
-                (edge_scalars.shape[0], self.config.edge_scalar_dim)
-            )
+        edge_scalars = edges.scalars
+        if self.edge_scalar_proj is not None:
+            if edge_scalars.numel():
+                proj_dtype = self.edge_scalar_proj.weight.dtype
+                edge_scalars_projected = self.edge_scalar_proj(edge_scalars.to(proj_dtype)).to(edge_scalars.dtype)
+            else:
+                edge_scalars_projected = edge_scalars.new_zeros(
+                    (edge_scalars.shape[0], self.config.edge_scalar_dim)
+                )
         else:
             edge_scalars_projected = edge_scalars
 
@@ -326,10 +357,10 @@ class GCPNetEncoder(nn.Module):
             scalars, vectors = layer(
                 scalars,
                 vectors,
-                edge_index,
+                edges.edge_index,
                 edge_scalars_projected,
                 edge_vectors,
-                edge_frames,
+                frames,
             )
             if mask is not None:
                 scalars = scalars * mask.unsqueeze(-1)
@@ -340,11 +371,12 @@ class GCPNetEncoder(nn.Module):
         readout_dtype = self.readout[1].weight.dtype
         embeddings = self.readout(readout_input.to(readout_dtype)).to(scalars.dtype)
 
-        output: Dict[str, Tensor] = {
+        output: Dict[str, Union[Tensor, ProteinBatch]] = {
             "embeddings": embeddings,
             "node_scalars": scalars,
             "node_vectors": vectors,
         }
+        output["batch"] = batch
 
         if self.displacement_head is not None:
             disp_input_dtype = self.displacement_head[1].weight.dtype

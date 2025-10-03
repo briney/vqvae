@@ -19,6 +19,7 @@ from torch.utils.data import DataLoader
 from gcpvqvae.data.dataset import BackboneDataset, collate_backbones
 from gcpvqvae.geometry.metrics import rmsd
 from gcpvqvae.models.decoder import RotationDecoder
+from gcpvqvae.data.batch import protein_batch_from_graph_dict
 from gcpvqvae.models.gcpnet import GCPNetConfig, GCPNetEncoder
 from gcpvqvae.models.gcpvqvae import RotationHeadConfig
 from gcpvqvae.models.losses import reconstruction_loss
@@ -239,28 +240,17 @@ class GCPNetPretrainModule(nn.Module):
             mask = mask & ~batch["nan_mask"].to(torch.bool)
 
         coords = batch["coords"]
-        node_scalars = batch["node_scalars"]
-        node_vectors = batch["node_vectors"]
-        edge_index = batch["edge_index"]
-        edge_scalars = batch["edge_scalars"]
-        edge_vectors = batch["edge_vectors"]
-        edge_frames = batch["edge_frames"]
+        proto = protein_batch_from_graph_dict(batch)
+        proto = proto.to(device=coords.device, dtype=coords.dtype)
 
-        batch_size, max_len, _ = node_scalars.shape
-        flat_scalars = node_scalars.reshape(batch_size * max_len, -1)
-        flat_vectors = node_vectors.reshape(batch_size * max_len, node_vectors.shape[2], node_vectors.shape[3])
-        flat_mask = mask.reshape(-1)
+        batch_size, max_len, _ = batch["node_scalars"].shape
 
-        gcp_out = self.encoder(
-            flat_scalars,
-            flat_vectors,
-            edge_index,
-            edge_scalars,
-            edge_vectors,
-            edge_frames,
-            mask=flat_mask,
-        )
-        embeddings = gcp_out["embeddings"].reshape(batch_size, max_len, -1)
+        gcp_out = self.encoder(proto)
+        flat_embeddings = gcp_out["embeddings"]
+        latent = flat_embeddings.shape[-1]
+        padded = flat_embeddings.new_zeros((batch_size * max_len, latent))
+        padded.index_copy_(0, proto.valid_indices, flat_embeddings)
+        embeddings = padded.reshape(batch_size, max_len, latent)
 
         recon_coords, pose = self.rotation(embeddings, mask=mask)
         rec_loss, rec_components = reconstruction_loss(
