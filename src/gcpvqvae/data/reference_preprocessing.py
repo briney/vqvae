@@ -2,10 +2,172 @@
 
 from __future__ import annotations
 
+import json
+from collections import Counter
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional, Sequence, Tuple
 
-from .preprocessing import preprocess_dataset
+import gemmi
+
+from gcpvqvae.data.mmcif import THREE_TO_ONE
+
+from .reference.preprocessing import (
+    _load_structure,
+    _validate_length,
+    _validate_missing_thresholds,
+    preprocess_chain,
+)
+
+
+_MANIFEST_NAME = "preprocessed_reference_dataset.json"
+_FILE_INDEX_NAME = "file_index.json"
+
+
+@dataclass
+class _ChainRecord:
+    """Summary of a successfully preprocessed chain."""
+
+    source_path: str
+    chain_id: str
+    length: int
+    sequence: str
+    missing_residues: int
+    missing_ratio: float
+    longest_missing_block: int
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "source_path": self.source_path,
+            "chain_id": self.chain_id,
+            "length": self.length,
+            "sequence": self.sequence,
+            "missing_residues": self.missing_residues,
+            "missing_ratio": self.missing_ratio,
+            "longest_missing_block": self.longest_missing_block,
+        }
+
+
+def _discover_structure_files(input_root: Path, *, use_cif: bool) -> List[Path]:
+    if input_root.is_file():
+        return [input_root]
+
+    if use_cif:
+        patterns = ["*.cif", "*.cif.gz", "*.mmcif", "*.mmcif.gz"]
+    else:
+        patterns = [
+            "*.cif",
+            "*.cif.gz",
+            "*.mmcif",
+            "*.mmcif.gz",
+            "*.pdb",
+            "*.pdb.gz",
+            "*.ent",
+            "*.ent.gz",
+        ]
+
+    files: List[Path] = []
+    for pattern in patterns:
+        files.extend(sorted(input_root.rglob(pattern)))
+    return files
+
+
+def _is_polymer_chain(chain: gemmi.Chain) -> bool:
+    residues = [res for res in chain.get_polymer() if THREE_TO_ONE.get(res.name.upper())]
+    return bool(residues)
+
+
+def _process_structure_file(
+    file_path: Path,
+    *,
+    min_len: Optional[int],
+    max_len: Optional[int],
+    gap_threshold: Optional[float],
+) -> Tuple[List[_ChainRecord], Counter]:
+    stats = Counter()
+    stats["files_total"] += 1
+
+    try:
+        structure = _load_structure(file_path)
+    except Exception:
+        stats["parsing_errors"] += 1
+        return [], stats
+
+    polymer_chains: List[gemmi.Chain] = []
+    if structure:
+        model = structure[0]
+        for chain in model:
+            if _is_polymer_chain(chain):
+                polymer_chains.append(chain)
+
+    if not polymer_chains:
+        stats["missing_coordinates"] += 1
+        return [], stats
+
+    if len({chain.name for chain in polymer_chains}) > 1:
+        stats["complexes"] += 1
+        return [], stats
+
+    records: List[_ChainRecord] = []
+    for chain in polymer_chains:
+        stats["chains_total"] += 1
+        processed = preprocess_chain(chain, gap_threshold=gap_threshold)
+        if processed.missing_residues:
+            stats["missing_coordinates"] += 1
+
+        length = int(processed.coords.shape[0])
+        length_ok, length_reason = _validate_length(
+            length, min_len=min_len, max_len=max_len
+        )
+        if not length_ok:
+            stats[length_reason] += 1  # type: ignore[index]
+            continue
+
+        missing_ok, missing_reason, ratio, longest = _validate_missing_thresholds(processed)
+        if not missing_ok:
+            stats[missing_reason] += 1  # type: ignore[index]
+            continue
+
+        stats["chains_written"] += 1
+        record = _ChainRecord(
+            source_path=str(file_path),
+            chain_id=chain.name,
+            length=length,
+            sequence=processed.protein_seq,
+            missing_residues=processed.missing_residues,
+            missing_ratio=ratio,
+            longest_missing_block=longest,
+        )
+        records.append(record)
+
+    return records, stats
+
+
+def _write_manifest(
+    output_dir: Path,
+    *,
+    entries: Sequence[_ChainRecord],
+    stats: Counter,
+    input_root: Path,
+) -> Path:
+    manifest = {
+        "input_root": str(input_root.resolve()),
+        "num_chains": len(entries),
+        "stats": dict(stats),
+        "chains": [entry.to_dict() for entry in entries],
+    }
+    manifest_path = output_dir / _MANIFEST_NAME
+    with manifest_path.open("w", encoding="utf-8") as handle:
+        json.dump(manifest, handle, indent=2)
+    return manifest_path
+
+
+def _write_file_index(output_dir: Path, files: Sequence[Path]) -> None:
+    index_path = output_dir / _FILE_INDEX_NAME
+    payload = {"files": [str(path) for path in files]}
+    with index_path.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2)
 
 
 def preprocess_reference_dataset(
@@ -19,22 +181,64 @@ def preprocess_reference_dataset(
     file_index: bool = True,
     gap_threshold: Optional[float] = None,
 ):
-    """Temporarily back the reference CLI with the legacy implementation."""
+    """Preprocess AlphaFold-style structures into backbone summaries."""
 
-    # The legacy preprocessing pipeline does not yet implement the reference-only
-    # options. They are accepted for forward compatibility but ignored for now.
-    # ``max_len`` maps onto the existing ``length_cap`` parameter.
-    kwargs = {}
-    if max_len is not None:
-        kwargs["length_cap"] = max_len
+    files = _discover_structure_files(input_root, use_cif=use_cif)
+    if not files:
+        raise ValueError(f"No structure files found under {input_root}")
 
-    return preprocess_dataset(
-        input_root,
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    entries: List[_ChainRecord] = []
+    stats = Counter()
+
+    worker_count: Optional[int]
+    if max_workers is None:
+        worker_count = None
+    elif max_workers <= 1:
+        worker_count = 1
+    else:
+        worker_count = max_workers
+
+    if worker_count in (None, 1):
+        for file_path in files:
+            file_entries, file_stats = _process_structure_file(
+                file_path,
+                min_len=min_len,
+                max_len=max_len,
+                gap_threshold=gap_threshold,
+            )
+            entries.extend(file_entries)
+            stats.update(file_stats)
+    else:
+        with ProcessPoolExecutor(max_workers=worker_count) as executor:
+            futures = [
+                executor.submit(
+                    _process_structure_file,
+                    file_path,
+                    min_len=min_len,
+                    max_len=max_len,
+                    gap_threshold=gap_threshold,
+                )
+                for file_path in files
+            ]
+            for future in as_completed(futures):
+                file_entries, file_stats = future.result()
+                entries.extend(file_entries)
+                stats.update(file_stats)
+
+    manifest_path = _write_manifest(
         output_dir,
-        overwrite=False,
-        progress=True,
-        **kwargs,
+        entries=entries,
+        stats=stats,
+        input_root=input_root,
     )
+
+    if file_index:
+        _write_file_index(output_dir, files)
+
+    return manifest_path, stats
 
 
 __all__ = ["preprocess_reference_dataset"]
+

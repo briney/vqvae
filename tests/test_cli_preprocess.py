@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -54,7 +55,7 @@ def test_preprocess_dataset_invokes_reference_driver(monkeypatch, tmp_path):
         manifest = output_path / "preprocessed_dataset.json"
         output_path.mkdir(parents=True, exist_ok=True)
         manifest.write_text("{}", encoding="utf-8")
-        return manifest
+        return manifest, Counter({"chains_written": 1})
 
     monkeypatch.setattr(
         "gcpvqvae.data.reference_preprocessing.preprocess_reference_dataset",
@@ -91,6 +92,7 @@ def test_preprocess_dataset_invokes_reference_driver(monkeypatch, tmp_path):
         "file_index": False,
         "gap_threshold": 1.5,
     }
+    assert "Summary: Counter({'chains_written': 1})" in result.output
     assert "Preprocessed dataset written to" in result.output
 
 

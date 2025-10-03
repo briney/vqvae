@@ -128,7 +128,7 @@ def preprocess_dataset_command(
     from gcpvqvae.data.reference_preprocessing import preprocess_reference_dataset
 
     try:
-        manifest_path = preprocess_reference_dataset(
+        result = preprocess_reference_dataset(
             input,
             output,
             max_len=max_len,
@@ -141,6 +141,14 @@ def preprocess_dataset_command(
     except (OSError, ValueError) as exc:
         raise click.ClickException(str(exc)) from exc
 
+    if isinstance(result, tuple):
+        manifest_path, stats = result
+    else:  # pragma: no cover - backwards compatibility
+        manifest_path = result
+        stats = None
+
+    if stats:
+        click.echo(f"Summary: {stats}")
     click.echo(f"Preprocessed dataset written to {manifest_path}")
 
 
