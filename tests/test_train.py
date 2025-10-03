@@ -61,12 +61,17 @@ def test_training_harness_runs_single_stage(tmp_path):
         },
         "model": {
             "gcp": {
-                "hidden_scalar_dim": 32,
-                "hidden_vector_dim": 4,
-                "edge_scalar_dim": 8,
-                "edge_vector_dim": 1,
+                "embedding": {
+                    "node_scalar_dim": 6,
+                    "node_vector_dim": 3,
+                    "edge_scalar_dim": 8,
+                    "edge_vector_dim": 1,
+                    "output": {"scalar": 32, "vector": 4},
+                },
+                "message_passing": {"width": {"scalar": 32, "vector": 4}},
+                "feed_forward": {"width": {"scalar": 64, "vector": 4}},
                 "latent_dim": 64,
-                "layers": 2,
+                "num_layers": 2,
             },
             "vq": {
                 "num_codes": 64,
@@ -140,12 +145,17 @@ def test_training_with_preprocessed_dataset(tmp_path):
         },
         "model": {
             "gcp": {
-                "hidden_scalar_dim": 32,
-                "hidden_vector_dim": 4,
-                "edge_scalar_dim": 8,
-                "edge_vector_dim": 1,
+                "embedding": {
+                    "node_scalar_dim": 6,
+                    "node_vector_dim": 3,
+                    "edge_scalar_dim": 8,
+                    "edge_vector_dim": 1,
+                    "output": {"scalar": 32, "vector": 4},
+                },
+                "message_passing": {"width": {"scalar": 32, "vector": 4}},
+                "feed_forward": {"width": {"scalar": 64, "vector": 4}},
                 "latent_dim": 64,
-                "layers": 2,
+                "num_layers": 2,
             },
             "vq": {
                 "num_codes": 64,
@@ -215,12 +225,17 @@ def test_training_on_cif_dataset_decreases_loss(tmp_path, monkeypatch):
         },
         "model": {
             "gcp": {
-                "hidden_scalar_dim": 16,
-                "hidden_vector_dim": 4,
-                "edge_scalar_dim": 8,
-                "edge_vector_dim": 1,
+                "embedding": {
+                    "node_scalar_dim": 6,
+                    "node_vector_dim": 3,
+                    "edge_scalar_dim": 8,
+                    "edge_vector_dim": 1,
+                    "output": {"scalar": 16, "vector": 4},
+                },
+                "message_passing": {"width": {"scalar": 16, "vector": 4}},
+                "feed_forward": {"width": {"scalar": 32, "vector": 4}},
                 "latent_dim": 16,
-                "layers": 2,
+                "num_layers": 2,
             },
             "vq": {
                 "num_codes": 16,
@@ -302,12 +317,17 @@ def test_training_with_eval_and_export(tmp_path, monkeypatch):
         },
         "model": {
             "gcp": {
-                "hidden_scalar_dim": 16,
-                "hidden_vector_dim": 4,
-                "edge_scalar_dim": 8,
-                "edge_vector_dim": 1,
+                "embedding": {
+                    "node_scalar_dim": 6,
+                    "node_vector_dim": 3,
+                    "edge_scalar_dim": 8,
+                    "edge_vector_dim": 1,
+                    "output": {"scalar": 16, "vector": 4},
+                },
+                "message_passing": {"width": {"scalar": 16, "vector": 4}},
+                "feed_forward": {"width": {"scalar": 32, "vector": 4}},
                 "latent_dim": 16,
-                "layers": 2,
+                "num_layers": 2,
             },
             "vq": {
                 "num_codes": 16,
@@ -434,12 +454,17 @@ def test_multi_stage_training_tracks_global_step(tmp_path, monkeypatch):
         },
         "model": {
             "gcp": {
-                "hidden_scalar_dim": 16,
-                "hidden_vector_dim": 4,
-                "edge_scalar_dim": 8,
-                "edge_vector_dim": 1,
+                "embedding": {
+                    "node_scalar_dim": 6,
+                    "node_vector_dim": 3,
+                    "edge_scalar_dim": 8,
+                    "edge_vector_dim": 1,
+                    "output": {"scalar": 16, "vector": 4},
+                },
+                "message_passing": {"width": {"scalar": 16, "vector": 4}},
+                "feed_forward": {"width": {"scalar": 32, "vector": 4}},
                 "latent_dim": 16,
-                "layers": 2,
+                "num_layers": 2,
             },
             "vq": {
                 "num_codes": 16,

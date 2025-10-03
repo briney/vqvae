@@ -28,22 +28,37 @@ omitted the defaults listed below are applied by the underlying dataclasses.
 
 ### `model.gcp` – GCP encoder (`GCPNetConfig`)
 
-| key | default | description |
-| --- | --- | --- |
-| `node_scalar_dim` | `6` | Input scalar feature channels per residue. |
-| `node_vector_dim` | `3` | Input vector feature channels per residue. |
-| `edge_scalar_dim` | `8` | Scalar features attached to each edge. |
-| `edge_scalar_input_dim` | `null` | Optional raw dimensionality of edge scalar features (defaults to `edge_scalar_dim`). |
-| `edge_vector_dim` | `1` | Vector features per edge. |
-| `hidden_scalar_dim` | `128` | Scalar width of the hidden representations. |
-| `hidden_vector_dim` | `16` | Vector channel count inside the GCP blocks. |
-| `latent_dim` | `256` | Output embedding dimension fed to the Transformer. |
-| `layers` | `6` | Number of stacked GCP convolution layers. |
-| `dropout` | `0.0` | Dropout applied within the convolutions. |
-| `displacement_head` | `False` | Enables an auxiliary displacement prediction head. |
-| `init` | `"random"` | Select `"random"` for fresh weights or `"pretrained"` to load from a checkpoint. |
-| `init_checkpoint` | `null` | Filesystem path to the checkpoint containing pretrained GCPNet weights. |
-| `strict_init` | `True` | Whether to enforce an exact key match when loading weights. |
+The encoder settings are organised into nested blocks:
+
+- `embedding`
+  - `node_scalar_dim` (`49`): input scalar channels per residue.
+  - `node_vector_dim` (`2`): input vector channels per residue.
+  - `edge_scalar_dim` (`9`): scalar edge features produced by preprocessing.
+  - `edge_scalar_input_dim` (`8`): raw edge scalar dimensionality; defaults to the preprocessor output when omitted.
+  - `edge_vector_dim` (`1`): vector channels per edge.
+  - `edge_vector_input_dim` (`1`): raw edge vector dimensionality; defaults to `edge_vector_dim`.
+  - `output.scalar` (`128`) / `output.vector` (`16`): widths of the projected node features.
+- `message_passing`
+  - `width.scalar` (`128`) / `width.vector` (`16`): working representation sizes inside the interaction blocks.
+  - `scalar_bottleneck_factor` (`0.5`): fraction used for the inner scalar bottleneck in the residual message passing stack.
+  - `vector_bottleneck_factor` (`0.5`): analogous factor for vector channels.
+  - `pooling` (`"mean"`): aggregation mode used when forming skip connections (`"mean"` or `"sum"`).
+- `feed_forward`
+  - `width.scalar` (`256`) / `width.vector` (`16`): hidden widths for the residual feed-forward stack.
+
+Additional top-level options control auxiliary behaviour:
+
+- `latent_dim` (`128`): encoder output width fed into the transformer stack.
+- `num_layers` (`6`): number of stacked interaction layers.
+- `dropout` (`0.0`): scalar/vector dropout probability within the GCP blocks.
+- `vector_gate` (`True`): enables scalar-gated vector updates.
+- `enable_e3_equivariance` (`True`): keeps vector updates E(3)-equivariant.
+- `node_inputs` (`True`): whether to include node features in message updates.
+- `predict_node_positions` (`False`): exposes the optional displacement head when `True`.
+- `predict_node_rep` (`False`): placeholder controlling auxiliary representation heads.
+- `use_gcp_dropout` (`True`): selects coupled scalar/vector dropout; disable to fall back to independent dropout.
+- `norm_pos_diff` (`False`): toggles normalisation of positional differences.
+- `init` (`"random"`), `init_checkpoint` (`null`), `strict_init` (`True`): checkpoint initialisation controls.
 
 ### `model.adapter` – Latent projection (`LatentAdapterConfig`)
 

@@ -8,13 +8,36 @@ data:
 
 model:
   gcp:
-    hidden_scalar_dim: 128
-    hidden_vector_dim: 16
-    edge_scalar_dim: 32
-    edge_scalar_input_dim: 8
-    edge_vector_dim: 1
-    latent_dim: 256
-    layers: 6
+    embedding:
+      node_scalar_dim: 49
+      node_vector_dim: 2
+      edge_scalar_dim: 9
+      edge_scalar_input_dim: 8
+      edge_vector_dim: 1
+      output:
+        scalar: 128
+        vector: 16
+    message_passing:
+      width:
+        scalar: 128
+        vector: 16
+      scalar_bottleneck_factor: 0.5
+      vector_bottleneck_factor: 0.5
+      pooling: mean
+    feed_forward:
+      width:
+        scalar: 256
+        vector: 16
+    latent_dim: 128
+    num_layers: 6
+    dropout: 0.0
+    vector_gate: true
+    enable_e3_equivariance: true
+    node_inputs: true
+    predict_node_positions: false
+    predict_node_rep: false
+    use_gcp_dropout: true
+    norm_pos_diff: false
     init: random
     init_checkpoint: null
     strict_init: true

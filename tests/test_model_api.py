@@ -8,7 +8,13 @@ import torch
 
 from gcpvqvae.data.dataset import BackboneDataset, collate_backbones
 from gcpvqvae.data.mmcif import BackboneRecord, write_mmcif
-from gcpvqvae.models.gcpnet import GCPNetConfig
+from gcpvqvae.models.gcpnet import (
+    GCPEmbeddingConfig,
+    GCPFeedForwardConfig,
+    GCPMessagePassingConfig,
+    GCPNetConfig,
+    GCPWidthConfig,
+)
 from gcpvqvae.models.gcpvqvae import (
     DataPipelineConfig,
     GCPVQVAE,
@@ -77,10 +83,17 @@ def _build_test_structure(path: Path) -> None:
 
 def _make_config() -> GCPVQVAEConfig:
     gcp_cfg = GCPNetConfig(
-        hidden_scalar_dim=64,
-        hidden_vector_dim=8,
+        embedding=GCPEmbeddingConfig(
+            node_scalar_dim=6,
+            node_vector_dim=3,
+            edge_scalar_dim=8,
+            edge_vector_dim=1,
+            output=GCPWidthConfig(scalar=64, vector=8),
+        ),
+        message_passing=GCPMessagePassingConfig(width=GCPWidthConfig(scalar=64, vector=8)),
+        feed_forward=GCPFeedForwardConfig(width=GCPWidthConfig(scalar=128, vector=8)),
         latent_dim=32,
-        layers=2,
+        num_layers=2,
     )
     vq_cfg = VectorQuantizerConfig(num_codes=32, dim=24, beta=0.25, decay=0.9, kmeans_iters=1)
     enc_cfg = TransformerConfig(
@@ -170,13 +183,18 @@ def test_latent_adapter_projects_embeddings(tmp_path) -> None:
     batch = collate_backbones([dataset[0]])
 
     gcp_cfg = GCPNetConfig(
-        hidden_scalar_dim=128,
-        hidden_vector_dim=16,
-        edge_scalar_dim=32,
-        edge_scalar_input_dim=8,
-        edge_vector_dim=1,
+        embedding=GCPEmbeddingConfig(
+            node_scalar_dim=6,
+            node_vector_dim=3,
+            edge_scalar_dim=8,
+            edge_scalar_input_dim=8,
+            edge_vector_dim=1,
+            output=GCPWidthConfig(scalar=128, vector=16),
+        ),
+        message_passing=GCPMessagePassingConfig(width=GCPWidthConfig(scalar=128, vector=16)),
+        feed_forward=GCPFeedForwardConfig(width=GCPWidthConfig(scalar=256, vector=16)),
         latent_dim=256,
-        layers=3,
+        num_layers=3,
     )
     adapter_cfg = LatentAdapterConfig(enabled=True, output_dim=32, bias=True)
     vq_cfg = VectorQuantizerConfig(num_codes=16, dim=24, beta=0.25, decay=0.9, kmeans_iters=1)
