@@ -16,10 +16,19 @@ def save_checkpoint(state: dict[str, Any], path: str | Path) -> None:
     torch.save(state, path_obj)
 
 
-def load_checkpoint(path: str | Path, *, map_location: Optional[str | torch.device] = None) -> dict[str, Any]:
+def load_checkpoint(
+    path: str | Path,
+    *,
+    map_location: Optional[str | torch.device] = None,
+) -> dict[str, Any]:
     """Load and return a previously saved training state."""
 
-    return torch.load(Path(path), map_location=map_location)
+    # ``torch.load`` defaulted ``weights_only`` to ``False`` prior to PyTorch 2.6,
+    # which allowed arbitrary Python objects (such as OmegaConf ``DictConfig``
+    # instances) to be deserialised.  The reference checkpoints for the GCPNet
+    # encoder store their configuration in this format, so we explicitly request
+    # the legacy behaviour to preserve compatibility with those files.
+    return torch.load(Path(path), map_location=map_location, weights_only=False)
 
 
 __all__ = ["save_checkpoint", "load_checkpoint"]
