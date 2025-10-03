@@ -174,7 +174,8 @@ def test_latent_adapter_projects_embeddings(tmp_path) -> None:
         hidden_vector_dim=16,
         edge_scalar_dim=32,
         edge_scalar_input_dim=8,
-        edge_vector_dim=1,
+        edge_vector_dim=4,
+        edge_vector_input_dim=1,
         latent_dim=256,
         layers=3,
     )

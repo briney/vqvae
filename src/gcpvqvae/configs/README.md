@@ -34,7 +34,8 @@ omitted the defaults listed below are applied by the underlying dataclasses.
 | `node_vector_dim` | `3` | Input vector feature channels per residue. |
 | `edge_scalar_dim` | `8` | Scalar features attached to each edge. |
 | `edge_scalar_input_dim` | `null` | Optional raw dimensionality of edge scalar features (defaults to `edge_scalar_dim`). |
-| `edge_vector_dim` | `1` | Vector features per edge. |
+| `edge_vector_dim` | `4` | Output vector channels per edge after embedding. |
+| `edge_vector_input_dim` | `1` | Raw vector channels per edge before embedding. |
 | `hidden_scalar_dim` | `128` | Scalar width of the hidden representations. |
 | `hidden_vector_dim` | `16` | Vector channel count inside the GCP blocks. |
 | `latent_dim` | `256` | Output embedding dimension fed to the Transformer. |

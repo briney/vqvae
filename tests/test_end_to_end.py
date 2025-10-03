@@ -62,7 +62,8 @@ def _make_small_config() -> GCPVQVAEConfig:
         hidden_scalar_dim=32,
         hidden_vector_dim=4,
         edge_scalar_dim=8,
-        edge_vector_dim=1,
+        edge_vector_dim=4,
+        edge_vector_input_dim=1,
         latent_dim=32,
         layers=2,
     )
