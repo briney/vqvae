@@ -246,7 +246,7 @@ class GCPNetPretrainModule(nn.Module):
         batch_size, max_len, _ = batch["node_scalars"].shape
 
         gcp_out = self.encoder(proto)
-        flat_embeddings = gcp_out["embeddings"]
+        flat_embeddings = gcp_out["node_embedding"]
         latent = flat_embeddings.shape[-1]
         padded = flat_embeddings.new_zeros((batch_size * max_len, latent))
         padded.index_copy_(0, proto.valid_indices, flat_embeddings)

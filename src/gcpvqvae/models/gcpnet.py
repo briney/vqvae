@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, Optional, Tuple, Union
 
 import torch
@@ -10,7 +10,7 @@ from torch import Tensor, nn
 
 from .gcpcore import scalarize, safe_norm, vector_linear, vectorize
 from gcpvqvae.data.batch import EdgeStorage, ProteinBatch
-from gcpvqvae.geometry.ops import centralize, ensure_edge_frames, localize
+from gcpvqvae.geometry.ops import centralize, decentralize, ensure_edge_frames, localize
 
 
 # Default number of scalar edge features produced by the featurisation pipeline.
@@ -150,6 +150,33 @@ class GCPDropout(nn.Module):
         return ScalarVector(scalars, vectors)
 
 
+class IdentityGCPDropout(nn.Module):
+    """No-op replacement for :class:`GCPDropout`."""
+
+    def forward(self, features: ScalarVector) -> ScalarVector:  # pragma: no cover - simple passthrough
+        return features
+
+
+class StandardGCPDropout(nn.Module):
+    """Fallback dropout that treats scalar/vector components independently."""
+
+    def __init__(self, p: float) -> None:
+        super().__init__()
+        self.scalar = nn.Dropout(p) if p > 0.0 else None
+        self.vector = nn.Dropout(p) if p > 0.0 else None
+
+    def forward(self, features: ScalarVector) -> ScalarVector:
+        scalars = features.scalars
+        vectors = features.vectors
+        if self.scalar is not None:
+            scalars = self.scalar(scalars)
+        if self.vector is not None and vectors.numel() > 0:
+            shape = vectors.shape
+            dropped = self.vector(vectors.view(shape[0], -1))
+            vectors = dropped.view(shape)
+        return ScalarVector(scalars, vectors)
+
+
 class GCPEmbedding(nn.Module):
     """Project raw node and edge features to the working feature spaces."""
 
@@ -157,20 +184,30 @@ class GCPEmbedding(nn.Module):
         super().__init__()
 
         self.config = config
+        embedding_cfg = config.embedding
+        output_scalar = embedding_cfg.output.scalar
+        output_vector = embedding_cfg.output.vector
+        if output_scalar is None or output_vector is None:
+            raise ValueError("Embedding output widths must be initialised before encoder construction")
+
         self.edge_scalar_in_dim = (
-            config.edge_scalar_input_dim if config.edge_scalar_input_dim is not None else config.edge_scalar_dim
+            embedding_cfg.edge_scalar_input_dim
+            if embedding_cfg.edge_scalar_input_dim is not None
+            else embedding_cfg.edge_scalar_dim
         )
         self.edge_vector_in_dim = (
-            config.edge_vector_input_dim if config.edge_vector_input_dim is not None else config.edge_vector_dim
+            embedding_cfg.edge_vector_input_dim
+            if embedding_cfg.edge_vector_input_dim is not None
+            else embedding_cfg.edge_vector_dim
         )
 
         self.node_scalar_proj = nn.Linear(
-            config.node_scalar_dim,
-            config.hidden_scalar_dim,
+            embedding_cfg.node_scalar_dim,
+            output_scalar,
             bias=False,
         )
         self.node_vector_proj = nn.Parameter(
-            torch.randn(config.hidden_vector_dim, config.node_vector_dim) * 0.02
+            torch.randn(output_vector, embedding_cfg.node_vector_dim) * 0.02
         )
 
         self.num_rbf = 16
@@ -180,11 +217,11 @@ class GCPEmbedding(nn.Module):
 
         self.edge_scalar_proj = nn.Linear(
             self.edge_scalar_in_dim + self.num_rbf,
-            config.edge_scalar_dim,
+            embedding_cfg.edge_scalar_dim,
             bias=False,
         )
         self.edge_vector_proj = nn.Parameter(
-            torch.randn(config.edge_vector_dim, self.edge_vector_in_dim) * 0.02
+            torch.randn(embedding_cfg.edge_vector_dim, self.edge_vector_in_dim) * 0.02
         )
 
     def _gaussian_rbf(self, distances: Tensor) -> Tensor:
@@ -468,8 +505,17 @@ class GCPMessagePassing(nn.Module):
         edge_scalar_dim = config.edge_scalar_dim
         edge_vector_dim = config.edge_vector_dim
 
-        bottleneck_scalar = max(1, scalar_dim // 2)
-        bottleneck_vector = max(1, vector_dim // 2)
+        mp_cfg = config.message_passing
+        if mp_cfg.scalar_bottleneck_factor > 0.0:
+            bottleneck_scalar = max(1, int(round(scalar_dim * mp_cfg.scalar_bottleneck_factor)))
+        else:
+            bottleneck_scalar = scalar_dim
+        if mp_cfg.vector_bottleneck_factor > 0.0:
+            bottleneck_vector = max(1, int(round(vector_dim * mp_cfg.vector_bottleneck_factor)))
+        else:
+            bottleneck_vector = vector_dim
+
+        self.pooling = mp_cfg.pooling
 
         self.layers = nn.ModuleList(
             [
@@ -555,12 +601,16 @@ class GCPMessagePassing(nn.Module):
 
         scalar_input = features.scalars.to(compute_dtype)
         agg_scalars = torch.sparse.mm(adjacency, scalar_input)
-        agg_scalars = (agg_scalars / degree).to(dtype)
+        if self.pooling == "mean":
+            agg_scalars = agg_scalars / degree
+        agg_scalars = agg_scalars.to(dtype)
 
         vector_shape = features.vectors.shape
         vectors_flat = features.vectors.reshape(num_nodes, -1).to(compute_dtype)
         agg_vectors_flat = torch.sparse.mm(adjacency, vectors_flat)
-        agg_vectors_flat = (agg_vectors_flat / degree).to(features.vectors.dtype)
+        if self.pooling == "mean":
+            agg_vectors_flat = agg_vectors_flat / degree
+        agg_vectors_flat = agg_vectors_flat.to(features.vectors.dtype)
         agg_vectors = agg_vectors_flat.view(vector_shape)
 
         if mask is not None:
@@ -588,26 +638,170 @@ class GCPMessagePassing(nn.Module):
 
 
 @dataclass
-class GCPNetConfig:
-    node_scalar_dim: int = 6
-    node_vector_dim: int = 3
-    edge_scalar_dim: int = 32
+class GCPWidthConfig:
+    """Scalar/vector width pair used across the encoder."""
+
+    scalar: Optional[int] = None
+    vector: Optional[int] = None
+
+
+@dataclass
+class GCPEmbeddingConfig:
+    """Input and projection dimensions for the embedding stage."""
+
+    node_scalar_dim: int = 49
+    node_vector_dim: int = 2
+    edge_scalar_dim: int = 9
     edge_scalar_input_dim: Optional[int] = DEFAULT_EDGE_SCALAR_INPUT_DIM
-    edge_vector_dim: int = 4
+    edge_vector_dim: int = 1
     edge_vector_input_dim: Optional[int] = 1
-    hidden_scalar_dim: int = 128
-    hidden_vector_dim: int = 16
-    latent_dim: int = 256
-    layers: int = 6
+    output: GCPWidthConfig = field(default_factory=GCPWidthConfig)
+
+
+@dataclass
+class GCPMessagePassingConfig:
+    """Widths and aggregation behaviour for message passing blocks."""
+
+    width: GCPWidthConfig = field(default_factory=lambda: GCPWidthConfig(scalar=128, vector=16))
+    scalar_bottleneck_factor: float = 0.5
+    vector_bottleneck_factor: float = 0.5
+    pooling: str = "mean"
+
+
+@dataclass
+class GCPFeedForwardConfig:
+    """Hidden widths inside the residual feed-forward stack."""
+
+    width: GCPWidthConfig = field(default_factory=GCPWidthConfig)
+
+
+@dataclass
+class GCPNetConfig:
+    embedding: GCPEmbeddingConfig = field(default_factory=GCPEmbeddingConfig)
+    message_passing: GCPMessagePassingConfig = field(default_factory=GCPMessagePassingConfig)
+    feed_forward: GCPFeedForwardConfig = field(default_factory=GCPFeedForwardConfig)
+    latent_dim: int = 128
+    num_layers: int = 6
     dropout: float = 0.0
     vector_gate: bool = True
     enable_e3_equivariance: bool = True
     node_inputs: bool = True
-    displacement_head: bool = False
+    predict_node_positions: bool = False
+    predict_node_rep: bool = False
+    readout_pooling: str = "sum"
+    use_gcp_dropout: bool = True
+    norm_pos_diff: bool = False
     prenorm: bool = True
     init: str = "random"
     init_checkpoint: Optional[str] = None
     strict_init: bool = True
+
+    def __post_init__(self) -> None:
+        if self.message_passing.width.scalar is None:
+            self.message_passing.width.scalar = 128
+        if self.message_passing.width.vector is None:
+            self.message_passing.width.vector = 16
+        if self.embedding.output.scalar is None:
+            self.embedding.output.scalar = self.message_passing.width.scalar
+        if self.embedding.output.vector is None:
+            self.embedding.output.vector = self.message_passing.width.vector
+        if self.feed_forward.width.scalar is None:
+            self.feed_forward.width.scalar = self.message_passing.width.scalar * 2
+        if self.feed_forward.width.vector is None:
+            self.feed_forward.width.vector = self.message_passing.width.vector
+        if self.embedding.edge_scalar_input_dim is None:
+            self.embedding.edge_scalar_input_dim = self.embedding.edge_scalar_dim
+        if self.embedding.edge_vector_input_dim is None:
+            self.embedding.edge_vector_input_dim = self.embedding.edge_vector_dim
+
+        if self.embedding.output.scalar != self.message_passing.width.scalar:
+            raise ValueError("embedding.output.scalar must match message_passing.width.scalar")
+        if self.embedding.output.vector != self.message_passing.width.vector:
+            raise ValueError("embedding.output.vector must match message_passing.width.vector")
+
+        valid_pool = {"sum", "mean"}
+        if self.readout_pooling not in valid_pool:
+            raise ValueError(f"readout_pooling must be one of {sorted(valid_pool)}")
+
+        if self.embedding.node_scalar_dim <= 0:
+            raise ValueError("embedding.node_scalar_dim must be positive")
+        if self.embedding.node_vector_dim <= 0:
+            raise ValueError("embedding.node_vector_dim must be positive")
+        if self.embedding.edge_scalar_dim <= 0:
+            raise ValueError("embedding.edge_scalar_dim must be positive")
+        if self.embedding.edge_vector_dim <= 0:
+            raise ValueError("embedding.edge_vector_dim must be positive")
+        if self.embedding.output.scalar is None or self.embedding.output.scalar <= 0:
+            raise ValueError("embedding.output.scalar must be a positive integer")
+        if self.embedding.output.vector is None or self.embedding.output.vector <= 0:
+            raise ValueError("embedding.output.vector must be a positive integer")
+        if self.message_passing.width.scalar is None or self.message_passing.width.scalar <= 0:
+            raise ValueError("message_passing.width.scalar must be a positive integer")
+        if self.message_passing.width.vector is None or self.message_passing.width.vector <= 0:
+            raise ValueError("message_passing.width.vector must be a positive integer")
+        if self.feed_forward.width.scalar is None or self.feed_forward.width.scalar <= 0:
+            raise ValueError("feed_forward.width.scalar must be a positive integer")
+        if self.feed_forward.width.vector is None or self.feed_forward.width.vector <= 0:
+            raise ValueError("feed_forward.width.vector must be a positive integer")
+        if self.latent_dim <= 0:
+            raise ValueError("latent_dim must be positive")
+        if self.num_layers <= 0:
+            raise ValueError("num_layers must be positive")
+
+        pooling = self.message_passing.pooling.lower()
+        if pooling not in {"mean", "sum"}:
+            raise ValueError("message_passing.pooling must be either 'mean' or 'sum'")
+        self.message_passing.pooling = pooling
+
+    @property
+    def node_scalar_dim(self) -> int:
+        return self.embedding.node_scalar_dim
+
+    @property
+    def node_vector_dim(self) -> int:
+        return self.embedding.node_vector_dim
+
+    @property
+    def edge_scalar_dim(self) -> int:
+        return self.embedding.edge_scalar_dim
+
+    @property
+    def edge_scalar_input_dim(self) -> int:
+        value = self.embedding.edge_scalar_input_dim
+        return value if value is not None else self.embedding.edge_scalar_dim
+
+    @property
+    def edge_vector_dim(self) -> int:
+        return self.embedding.edge_vector_dim
+
+    @property
+    def edge_vector_input_dim(self) -> int:
+        value = self.embedding.edge_vector_input_dim
+        return value if value is not None else self.embedding.edge_vector_dim
+
+    @property
+    def hidden_scalar_dim(self) -> int:
+        assert self.message_passing.width.scalar is not None
+        return self.message_passing.width.scalar
+
+    @property
+    def hidden_vector_dim(self) -> int:
+        assert self.message_passing.width.vector is not None
+        return self.message_passing.width.vector
+
+    @property
+    def feed_forward_scalar_dim(self) -> int:
+        assert self.feed_forward.width.scalar is not None
+        return self.feed_forward.width.scalar
+
+    @property
+    def feed_forward_vector_dim(self) -> int:
+        assert self.feed_forward.width.vector is not None
+        return self.feed_forward.width.vector
+
+    @property
+    def layers(self) -> int:
+        return self.num_layers
 
 
 class GCPInteractions(nn.Module):
@@ -625,7 +819,13 @@ class GCPInteractions(nn.Module):
         ) if self.prenorm else None
 
         self.message_passing = GCPMessagePassing(config)
-        self.residual_dropout = GCPDropout(config.dropout)
+        if config.dropout > 0.0:
+            if config.use_gcp_dropout:
+                self.residual_dropout: nn.Module = GCPDropout(config.dropout)
+            else:
+                self.residual_dropout = StandardGCPDropout(config.dropout)
+        else:
+            self.residual_dropout = IdentityGCPDropout()
 
         self.skip_proj = nn.Linear(config.hidden_scalar_dim * 2, config.hidden_scalar_dim, bias=False)
         self.skip_vector_proj = nn.Parameter(
@@ -639,8 +839,8 @@ class GCPInteractions(nn.Module):
                     config.hidden_vector_dim,
                     edge_scalar_dim=config.edge_scalar_dim,
                     edge_vector_channels=config.edge_vector_dim,
-                    hidden_scalar_dim=config.hidden_scalar_dim * 2,
-                    hidden_vector_channels=config.hidden_vector_dim,
+                    hidden_scalar_dim=config.feed_forward_scalar_dim,
+                    hidden_vector_channels=config.feed_forward_vector_dim,
                     dropout=config.dropout,
                     vector_gate=config.vector_gate,
                     enable_e3_equivariance=config.enable_e3_equivariance,
@@ -651,8 +851,8 @@ class GCPInteractions(nn.Module):
                     config.hidden_vector_dim,
                     edge_scalar_dim=config.edge_scalar_dim,
                     edge_vector_channels=config.edge_vector_dim,
-                    hidden_scalar_dim=config.hidden_scalar_dim * 2,
-                    hidden_vector_channels=config.hidden_vector_dim,
+                    hidden_scalar_dim=config.feed_forward_scalar_dim,
+                    hidden_vector_channels=config.feed_forward_vector_dim,
                     dropout=config.dropout,
                     vector_gate=config.vector_gate,
                     enable_e3_equivariance=config.enable_e3_equivariance,
@@ -661,9 +861,15 @@ class GCPInteractions(nn.Module):
             ]
         )
 
-        self.feedforward_dropout = GCPDropout(config.dropout)
+        if config.dropout > 0.0:
+            if config.use_gcp_dropout:
+                self.feedforward_dropout: nn.Module = GCPDropout(config.dropout)
+            else:
+                self.feedforward_dropout = StandardGCPDropout(config.dropout)
+        else:
+            self.feedforward_dropout = IdentityGCPDropout()
 
-        if config.displacement_head:
+        if config.predict_node_positions:
             self.node_position_head = nn.Linear(config.hidden_scalar_dim, 3, bias=False)
         else:
             self.node_position_head = None
@@ -734,13 +940,13 @@ class GCPNetEncoder(nn.Module):
 
         self.config = config or GCPNetConfig()
 
-        if self.config.edge_scalar_input_dim is None:
-            self.config.edge_scalar_input_dim = self.config.edge_scalar_dim
-        if self.config.edge_vector_input_dim is None:
-            self.config.edge_vector_input_dim = self.config.edge_vector_dim
+        if self.config.embedding.edge_scalar_input_dim is None:
+            self.config.embedding.edge_scalar_input_dim = self.config.embedding.edge_scalar_dim
+        if self.config.embedding.edge_vector_input_dim is None:
+            self.config.embedding.edge_vector_input_dim = self.config.embedding.edge_vector_dim
 
         self.embedding = GCPEmbedding(self.config)
-        num_layers = self.config.layers if self.config.layers is not None else 6
+        num_layers = self.config.num_layers
         self.interactions = nn.ModuleList(
             [GCPInteractions(self.config) for _ in range(num_layers)]
         )
@@ -750,6 +956,33 @@ class GCPNetEncoder(nn.Module):
             nn.LayerNorm(readout_dim),
             nn.Linear(readout_dim, self.config.latent_dim, bias=False),
         )
+        self.node_rep_dim = 128
+        if self.config.predict_node_rep:
+            self.node_projection_norm = GCPLayerNorm(
+                self.config.hidden_scalar_dim,
+                self.config.hidden_vector_dim,
+            )
+            self.node_projection_linear = nn.Linear(
+                self.config.hidden_scalar_dim,
+                self.node_rep_dim,
+                bias=False,
+            )
+            self.node_projection = GCPConv(
+                self.node_rep_dim,
+                0,
+                edge_scalar_dim=self.config.edge_scalar_dim,
+                edge_vector_channels=self.config.edge_vector_dim,
+                hidden_scalar_dim=self.config.feed_forward_scalar_dim,
+                hidden_vector_channels=0,
+                dropout=0.0,
+                vector_gate=False,
+                enable_e3_equivariance=self.config.enable_e3_equivariance,
+                node_inputs=self.config.node_inputs,
+            )
+        else:
+            self.node_projection_norm = None
+            self.node_projection_linear = None
+            self.node_projection = None
 
     def _prepare_edges(
         self,
@@ -777,7 +1010,9 @@ class GCPNetEncoder(nn.Module):
         batch.edge_frames = frames
         return edges, frames
 
-    def forward(self, batch: ProteinBatch) -> Dict[str, Union[Tensor, ProteinBatch]]:
+    def forward(
+        self, batch: ProteinBatch
+    ) -> Dict[str, Union[Tensor, ProteinBatch, Dict[str, EdgeStorage]]]:
         if not isinstance(batch, ProteinBatch):
             raise TypeError("GCPNetEncoder.forward expects a ProteinBatch")
 
@@ -793,6 +1028,7 @@ class GCPNetEncoder(nn.Module):
         batch.xi_raw = batch.xi.clone()
         centered_positions, centroids = centralize(batch.xi, batch.batch, mask=mask)
         batch.xi = centered_positions
+        batch.xi_centered = centered_positions
         batch.centroids = centroids
 
         edges, frames = self._prepare_edges(batch, mask)
@@ -829,15 +1065,90 @@ class GCPNetEncoder(nn.Module):
         vec_norms = safe_norm(node_features.vectors, dim=-1)
         readout_input = torch.cat((node_features.scalars, vec_norms.to(node_features.scalars.dtype)), dim=-1)
         readout_dtype = self.readout[1].weight.dtype
-        embeddings = self.readout(readout_input.to(readout_dtype)).to(node_features.scalars.dtype)
+        node_embedding = self.readout(readout_input.to(readout_dtype)).to(node_features.scalars.dtype)
 
-        output: Dict[str, Union[Tensor, ProteinBatch]] = {
-            "embeddings": embeddings,
+        if self.config.predict_node_rep and self.node_projection is not None:
+            norm_features = self.node_projection_norm(node_features) if self.node_projection_norm is not None else node_features
+            proj_dtype = self.node_projection_linear.weight.dtype if self.node_projection_linear is not None else norm_features.scalars.dtype
+            projected_scalars = (
+                self.node_projection_linear(norm_features.scalars.to(proj_dtype)).to(norm_features.scalars.dtype)
+                if self.node_projection_linear is not None
+                else norm_features.scalars
+            )
+            zero_vectors = norm_features.vectors.new_zeros((norm_features.vectors.size(0), 0, 3))
+            projection_input = ScalarVector(projected_scalars, zero_vectors)
+            projected_features = self.node_projection(
+                projection_input,
+                edge_features,
+                edges.edge_index,
+                frames,
+                mask=mask,
+            )
+            node_embedding = projected_features.scalars
+
+        num_nodes = node_embedding.shape[0]
+        num_graphs = batch.num_graphs()
+        compute_dtype = (
+            torch.float32
+            if node_embedding.dtype in {torch.float16, torch.bfloat16}
+            else node_embedding.dtype
+        )
+        contribution = node_embedding.to(compute_dtype)
+        if mask is not None:
+            node_mask = mask.to(dtype=compute_dtype).unsqueeze(-1)
+            contribution = contribution * node_mask
+            count_src = node_mask
+        else:
+            count_src = contribution.new_ones((num_nodes, 1))
+
+        graph_embedding = contribution.new_zeros((num_graphs, contribution.shape[-1]))
+        if num_nodes > 0 and num_graphs > 0:
+            graph_embedding.index_add_(0, batch.batch, contribution)
+        counts = contribution.new_zeros((num_graphs, 1))
+        if num_nodes > 0 and num_graphs > 0:
+            counts.index_add_(0, batch.batch, count_src)
+        if self.config.readout_pooling == "mean" and num_graphs > 0:
+            graph_embedding = graph_embedding / torch.clamp(counts, min=1.0)
+        graph_embedding = graph_embedding.to(node_embedding.dtype)
+
+        pos: Optional[Tensor] = None
+        if self.config.predict_node_positions:
+            displacement = displacements
+            if displacement is None:
+                displacement = batch.xi.new_zeros((batch.xi.shape[0], 3))
+            if mask is not None:
+                displacement = displacement * mask.unsqueeze(-1).to(displacement.dtype)
+            centered = batch.xi + displacement
+            absolute = decentralize(centered, batch.centroids, batch.batch)
+            batch.xi_centered = centered
+            batch.xi = absolute
+            pos = absolute
+            frames = ensure_edge_frames(
+                batch.xi,
+                edges.edge_index,
+                edge_batch=edges.batch,
+                node_batch=batch.batch,
+                mask=mask,
+            )
+            edges.frames = frames
+            batch.edge_frames = frames
+        else:
+            pos = None
+
+        output: Dict[str, Union[Tensor, ProteinBatch, Dict[str, EdgeStorage]]] = {
+            "node_embedding": node_embedding,
+            "graph_embedding": graph_embedding,
             "node_scalars": node_features.scalars,
             "node_vectors": node_features.vectors,
             "batch": batch,
+            "h": batch.h,
+            "chi": batch.chi,
+            "e": batch.e,
+            "xi": batch.xi,
         }
 
+        if pos is not None:
+            output["pos"] = pos
         if displacements is not None:
             output["displacement"] = displacements
 
@@ -847,6 +1158,10 @@ class GCPNetEncoder(nn.Module):
 __all__ = [
     "GCPNetEncoder",
     "GCPNetConfig",
+    "GCPWidthConfig",
+    "GCPEmbeddingConfig",
+    "GCPMessagePassingConfig",
+    "GCPFeedForwardConfig",
     "GCPConv",
     "GCPLayerNorm",
     "GCPDropout",

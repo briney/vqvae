@@ -21,6 +21,7 @@ except ModuleNotFoundError:  # pragma: no cover - exercised when hydra is absent
 
 import yaml
 
+from gcpvqvae.models.gcpnet import GCPNetConfig
 from gcpvqvae.models.gcpvqvae import GCPVQVAEConfig
 
 
@@ -29,11 +30,50 @@ DEFAULT_TRAIN_CONFIG_PATH = _CONFIG_DIR / "base.yaml"
 DEFAULT_GCPNET_PRETRAIN_CONFIG_PATH = _CONFIG_DIR / "gcpnet_pretrain.yaml"
 
 
+def _migrate_gcpnet_config(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Upgrade legacy flat keys to the nested GCPNet configuration schema."""
+
+    mapping: Dict[str, tuple[str, ...]] = {
+        "node_scalar_dim": ("embedding", "node_scalar_dim"),
+        "node_vector_dim": ("embedding", "node_vector_dim"),
+        "edge_scalar_dim": ("embedding", "edge_scalar_dim"),
+        "edge_vector_dim": ("embedding", "edge_vector_dim"),
+        "edge_scalar_input_dim": ("embedding", "edge_scalar_input_dim"),
+        "edge_vector_input_dim": ("embedding", "edge_vector_input_dim"),
+        "hidden_scalar_dim": ("message_passing", "width", "scalar"),
+        "hidden_vector_dim": ("message_passing", "width", "vector"),
+        "layers": ("num_layers",),
+        "displacement_head": ("predict_node_positions",),
+    }
+
+    upgraded = dict(data)
+    for legacy_key, path in mapping.items():
+        if legacy_key not in upgraded:
+            continue
+        value = upgraded.pop(legacy_key)
+        cursor = upgraded
+        for part in path[:-1]:
+            existing = cursor.get(part)
+            if existing is None or not isinstance(existing, dict):
+                existing = {}
+                cursor[part] = existing
+            cursor = existing
+        final_key = path[-1]
+        if final_key in cursor:
+            continue
+        cursor[final_key] = value
+
+    return upgraded
+
+
 def update_dataclass(instance: Any, updates: Dict[str, Any]) -> Any:
     """Recursively apply ``updates`` to a dataclass ``instance``."""
 
     if not dataclasses.is_dataclass(instance) or not isinstance(updates, dict):
         return instance
+
+    if isinstance(instance, GCPNetConfig):
+        updates = _migrate_gcpnet_config(dict(updates))
 
     for key, value in updates.items():
         if not hasattr(instance, key):
@@ -56,6 +96,8 @@ def build_model_config(raw: Optional[Dict[str, Any]]) -> GCPVQVAEConfig:
                 continue
             current = getattr(config, key)
             if dataclasses.is_dataclass(current):
+                if key == "gcp" and isinstance(value, dict):
+                    value = _migrate_gcpnet_config(value)
                 setattr(config, key, update_dataclass(current, value))
             else:
                 setattr(config, key, value)

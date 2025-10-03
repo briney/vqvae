@@ -4,8 +4,11 @@ from gcpvqvae.data.batch import EdgeStorage, ProteinBatch
 from gcpvqvae.models.gcpnet import (
     DEFAULT_EDGE_SCALAR_INPUT_DIM,
     GCPConv,
+    GCPFeedForwardConfig,
+    GCPMessagePassingConfig,
     GCPNetConfig,
     GCPNetEncoder,
+    GCPWidthConfig,
     ScalarVector,
 )
 from gcpvqvae.system.train_gcpnet import _prepare_model_config
@@ -47,7 +50,9 @@ def test_gcpnet_encoder_projects_edge_scalars_with_default_input_dim() -> None:
 
     output = encoder(proto)
 
-    assert output["embeddings"].shape == (num_nodes, config.latent_dim)
+    node_dim = output["node_embedding"].shape[-1]
+    assert output["node_embedding"].shape == (num_nodes, node_dim)
+    assert output["graph_embedding"].shape == (proto.num_graphs(), node_dim)
 
 
 def test_prepare_model_config_defaults_edge_scalar_input_dim() -> None:
@@ -63,8 +68,8 @@ def test_gcpconv_supports_bfloat16_inputs() -> None:
         config.hidden_vector_dim,
         edge_scalar_dim=config.edge_scalar_dim,
         edge_vector_channels=config.edge_vector_dim,
-        hidden_scalar_dim=config.hidden_scalar_dim * 2,
-        hidden_vector_channels=config.hidden_vector_dim,
+        hidden_scalar_dim=config.feed_forward_scalar_dim,
+        hidden_vector_channels=config.feed_forward_vector_dim,
         dropout=config.dropout,
     )
 
@@ -85,7 +90,12 @@ def test_gcpconv_supports_bfloat16_inputs() -> None:
 
 
 def test_gcpnet_encoder_supports_bfloat16_inputs() -> None:
-    config = GCPNetConfig(layers=2, hidden_scalar_dim=16, hidden_vector_dim=8, latent_dim=32)
+    config = GCPNetConfig(
+        message_passing=GCPMessagePassingConfig(width=GCPWidthConfig(scalar=16, vector=8)),
+        feed_forward=GCPFeedForwardConfig(width=GCPWidthConfig(scalar=32, vector=8)),
+        latent_dim=32,
+        num_layers=2,
+    )
     encoder = GCPNetEncoder(config)
 
     num_nodes = 5
@@ -119,6 +129,6 @@ def test_gcpnet_encoder_supports_bfloat16_inputs() -> None:
 
     outputs = encoder(proto)
 
-    assert outputs["embeddings"].dtype is torch.bfloat16
+    assert outputs["node_embedding"].dtype is torch.bfloat16
     assert outputs["node_scalars"].dtype is torch.bfloat16
     assert outputs["node_vectors"].dtype is torch.bfloat16

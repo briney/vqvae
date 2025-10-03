@@ -11,9 +11,15 @@ from gcpvqvae.data.dataset import BackboneDataset, collate_backbones
 from gcpvqvae.geometry.frames import kabsch_align
 from gcpvqvae.geometry.metrics import rmsd
 from gcpvqvae.models.decoder import RotationDecoder
+from gcpvqvae.models.gcpnet import (
+    GCPEmbeddingConfig,
+    GCPFeedForwardConfig,
+    GCPMessagePassingConfig,
+    GCPNetConfig,
+    GCPWidthConfig,
+)
 from gcpvqvae.models.gcpvqvae import (
     DataPipelineConfig,
-    GCPNetConfig,
     GCPVQVAE,
     GCPVQVAEConfig,
     RotationHeadConfig,
@@ -59,12 +65,17 @@ def _build_roundtrip_structure(path: Path) -> None:
 
 def _make_small_config() -> GCPVQVAEConfig:
     gcp_cfg = GCPNetConfig(
-        hidden_scalar_dim=32,
-        hidden_vector_dim=4,
-        edge_scalar_dim=8,
-        edge_vector_dim=1,
+        embedding=GCPEmbeddingConfig(
+            node_scalar_dim=6,
+            node_vector_dim=3,
+            edge_scalar_dim=8,
+            edge_vector_dim=1,
+            output=GCPWidthConfig(scalar=32, vector=4),
+        ),
+        message_passing=GCPMessagePassingConfig(width=GCPWidthConfig(scalar=32, vector=4)),
+        feed_forward=GCPFeedForwardConfig(width=GCPWidthConfig(scalar=64, vector=4)),
         latent_dim=32,
-        layers=2,
+        num_layers=2,
     )
     vq_cfg = VectorQuantizerConfig(num_codes=16, dim=32, beta=0.25, decay=0.9, kmeans_iters=1)
     enc_cfg = TransformerConfig(
