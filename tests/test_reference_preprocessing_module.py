@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 from pathlib import Path
 from typing import Iterable
 
 import gemmi
+import h5py
 import numpy as np
 import pytest
 
@@ -14,6 +16,19 @@ from gcpvqvae.data.reference.preprocessing import (
     _validate_missing_thresholds,
 )
 from gcpvqvae.data.reference_preprocessing import preprocess_reference_dataset
+
+_EXPECTED_FIXTURE_PATH = (
+    Path(__file__).resolve().parent / "test_data" / "reference_h5_expected.py"
+)
+_EXPECTED_SPEC = importlib.util.spec_from_file_location(
+    "reference_h5_expected", _EXPECTED_FIXTURE_PATH
+)
+if _EXPECTED_SPEC is None or _EXPECTED_SPEC.loader is None:  # pragma: no cover
+    raise RuntimeError(f"Unable to load fixture module at {_EXPECTED_FIXTURE_PATH}")
+_EXPECTED_MODULE = importlib.util.module_from_spec(_EXPECTED_SPEC)
+_EXPECTED_SPEC.loader.exec_module(_EXPECTED_MODULE)
+VALID_CHAIN_A = _EXPECTED_MODULE.VALID_CHAIN_A
+MISSING_CHAIN_A = _EXPECTED_MODULE.MISSING_CHAIN_A
 
 
 def _make_chain(mask: Iterable[bool]) -> PreprocessedChain:
@@ -82,6 +97,33 @@ def _write_structure(
     structure.setup_entities()
     doc = structure.make_mmcif_document()
     doc.write_file(str(path))
+
+
+def _assert_h5_matches_expected(generated_path: Path, expected: dict[str, object]) -> None:
+    with h5py.File(generated_path, "r") as generated:
+        expected_keys = {"seq", "N_CA_C_O_coord", "plddt_scores"}
+        assert set(generated.keys()) == expected_keys
+
+        generated_seq = generated["seq"][()].decode("ascii")
+        assert generated_seq == expected["seq"]
+
+        generated_coords = generated["N_CA_C_O_coord"][()]
+        reference_coords = np.asarray(expected["coords"], dtype=np.float64)
+        assert np.array_equal(np.isnan(generated_coords), np.isnan(reference_coords))
+        np.testing.assert_allclose(
+            generated_coords,
+            reference_coords,
+            equal_nan=True,
+        )
+
+        generated_plddt = generated["plddt_scores"][()]
+        reference_plddt = np.asarray(expected["plddt"], dtype=np.float64)
+        assert np.array_equal(np.isnan(generated_plddt), np.isnan(reference_plddt))
+        np.testing.assert_allclose(
+            generated_plddt,
+            reference_plddt,
+            equal_nan=True,
+        )
 
 
 def test_validate_length_bounds() -> None:
@@ -157,6 +199,12 @@ def test_preprocess_reference_dataset_collects_stats(tmp_path: Path) -> None:
     assert entry["chain_id"] == "A"
     assert entry["length"] == 10
     assert entry["missing_residues"] == 0
+    assert entry["h5_path"].endswith(".h5")
+
+    h5_path = output_dir / entry["h5_path"]
+    assert h5_path.exists()
+    with h5py.File(h5_path, "r") as handle:
+        assert set(handle.keys()) == {"seq", "N_CA_C_O_coord", "plddt_scores"}
 
     index_path = output_dir / "file_index.json"
     assert index_path.exists()
@@ -173,3 +221,67 @@ def test_preprocess_reference_dataset_collects_stats(tmp_path: Path) -> None:
     assert stats["missing_ratio_exceeded"] == 1
     assert stats["missing_block_exceeded"] == 1
     assert stats["missing_coordinates"] == 2
+    assert stats["h5_processed"] == 1
+
+
+def test_preprocess_reference_dataset_h5_matches_fixture(tmp_path: Path) -> None:
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    _write_structure(input_dir / "valid.cif", num_residues=5)
+
+    output_dir = tmp_path / "output"
+    manifest_path, _ = preprocess_reference_dataset(
+        input_dir,
+        output_dir,
+        use_cif=True,
+        file_index=True,
+    )
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    entry = manifest["chains"][0]
+    h5_path = output_dir / entry["h5_path"]
+    _assert_h5_matches_expected(h5_path, VALID_CHAIN_A)
+
+
+def test_preprocess_reference_dataset_h5_preserves_nans(tmp_path: Path) -> None:
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    _write_structure(
+        input_dir / "missing.cif",
+        num_residues=10,
+        missing_ca={8, 9},
+    )
+
+    output_dir = tmp_path / "output"
+    manifest_path, _ = preprocess_reference_dataset(
+        input_dir,
+        output_dir,
+        use_cif=True,
+        file_index=True,
+    )
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    entry = manifest["chains"][0]
+    assert entry["missing_residues"] == 2
+    h5_path = output_dir / entry["h5_path"]
+    _assert_h5_matches_expected(h5_path, MISSING_CHAIN_A)
+
+
+def test_preprocess_reference_dataset_omits_index_when_requested(tmp_path: Path) -> None:
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    _write_structure(input_dir / "simple.cif", num_residues=4)
+
+    output_dir = tmp_path / "output"
+    manifest_path, stats = preprocess_reference_dataset(
+        input_dir,
+        output_dir,
+        use_cif=True,
+        file_index=False,
+    )
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    entry = manifest["chains"][0]
+    assert entry["h5_path"] == "simple_chain_id_A.h5"
+    assert stats["h5_processed"] == 1
+    assert not (output_dir / "file_index.json").exists()

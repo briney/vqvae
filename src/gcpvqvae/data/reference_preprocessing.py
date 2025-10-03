@@ -5,15 +5,18 @@ from __future__ import annotations
 import json
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
+import h5py
 import gemmi
+import numpy as np
 
 from gcpvqvae.data.mmcif import THREE_TO_ONE
 
 from .reference.preprocessing import (
+    PreprocessedChain,
     _load_structure,
     _validate_length,
     _validate_missing_thresholds,
@@ -36,9 +39,11 @@ class _ChainRecord:
     missing_residues: int
     missing_ratio: float
     longest_missing_block: int
+    preprocessed: "PreprocessedChain" = field(repr=False)
+    h5_path: Optional[str] = None
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "source_path": self.source_path,
             "chain_id": self.chain_id,
             "length": self.length,
@@ -47,6 +52,47 @@ class _ChainRecord:
             "missing_ratio": self.missing_ratio,
             "longest_missing_block": self.longest_missing_block,
         }
+        if self.h5_path is not None:
+            payload["h5_path"] = self.h5_path
+        return payload
+
+
+def _structure_stem(path: Path) -> str:
+    name = path.name
+    if name.endswith(".gz"):
+        name = name[:-3]
+    return Path(name).stem or path.stem
+
+
+def _sanitise_chain_id(chain_id: str) -> str:
+    safe = chain_id.strip()
+    if not safe:
+        return "unknown"
+    return safe.replace("/", "_").replace(" ", "_")
+
+
+def _write_h5(record: _ChainRecord, *, output_dir: Path, include_index: bool, index: int) -> Path:
+    stem = _structure_stem(Path(record.source_path))
+    chain_id = _sanitise_chain_id(record.chain_id)
+    if include_index:
+        file_name = f"{index:08d}_{stem}_chain_id_{chain_id}.h5"
+    else:
+        file_name = f"{stem}_chain_id_{chain_id}.h5"
+
+    file_path = output_dir / file_name
+    chain = record.preprocessed
+
+    seq_bytes = np.array(chain.protein_seq, dtype=f"S{len(chain.protein_seq) or 1}")
+    coords = np.asarray(chain.coords, dtype=np.float64)
+    plddt = np.asarray(chain.plddt, dtype=np.float64)
+
+    with h5py.File(file_path, "w") as handle:
+        handle.create_dataset("seq", data=seq_bytes)
+        handle.create_dataset("N_CA_C_O_coord", data=coords)
+        handle.create_dataset("plddt_scores", data=plddt)
+
+    record.h5_path = file_name
+    return file_path
 
 
 def _discover_structure_files(input_root: Path, *, use_cif: bool) -> List[Path]:
@@ -138,6 +184,7 @@ def _process_structure_file(
             missing_residues=processed.missing_residues,
             missing_ratio=ratio,
             longest_missing_block=longest,
+            preprocessed=processed,
         )
         records.append(record)
 
@@ -187,6 +234,8 @@ def preprocess_reference_dataset(
     if not files:
         raise ValueError(f"No structure files found under {input_root}")
 
+    if output_dir.exists() and not output_dir.is_dir():
+        raise NotADirectoryError(f"{output_dir} is not a directory")
     output_dir.mkdir(parents=True, exist_ok=True)
 
     entries: List[_ChainRecord] = []
@@ -226,6 +275,13 @@ def preprocess_reference_dataset(
                 file_entries, file_stats = future.result()
                 entries.extend(file_entries)
                 stats.update(file_stats)
+
+    entries.sort(key=lambda record: (record.source_path, record.chain_id))
+
+    include_index = bool(file_index)
+    for idx, record in enumerate(entries):
+        _write_h5(record, output_dir=output_dir, include_index=include_index, index=idx)
+        stats["h5_processed"] += 1
 
     manifest_path = _write_manifest(
         output_dir,
