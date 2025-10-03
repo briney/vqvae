@@ -197,6 +197,9 @@ Configure your training parameters in `configs/config_vqvae.yaml` and run:
 
 Note:
 - Training expects datasets in the HDF5 layout defined in [HDF5 format used by this repo](#hdf5-format-used-by-this-repo).
+- `train_settings.num_steps` controls run length by default; set it to `null` when you prefer to stop after `num_epochs` instead.
+- Step-based intervals (logging, checkpoints, validation, PDB export) can optionally be overridden with epoch values by setting the corresponding `epochs` field in the YAML.
+- The training dataloader now iterates over the full dataset each epoch and reshuffles automatically when `shuffle: true`.
 
 ```bash
 # Set up accelerator configuration for multi-GPU training

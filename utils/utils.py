@@ -352,6 +352,10 @@ def prepare_optimizer(net, configs, num_train_samples, logging):
         if configured_num_steps is not None:
             total_training_steps = int(configured_num_steps)
         else:
+            if getattr(configs.train_settings, 'num_epochs', None) is None:
+                raise ValueError(
+                    'train_settings.num_epochs must be provided when train_settings.num_steps is null.'
+                )
             total_training_steps = int(np.ceil(steps_per_epoch * configs.train_settings.num_epochs))
 
         if total_training_steps <= 0:
