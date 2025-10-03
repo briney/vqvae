@@ -6,6 +6,7 @@ from gcpvqvae.models.gcpnet import (
     GCPConv,
     GCPNetConfig,
     GCPNetEncoder,
+    ScalarVector,
 )
 from gcpvqvae.system.train_gcpnet import _prepare_model_config
 
@@ -74,17 +75,13 @@ def test_gcpconv_supports_bfloat16_inputs() -> None:
     edge_vectors = torch.randn(edge_index.shape[1], conv.edge_vector_channels, 3, dtype=torch.bfloat16)
     edge_frames = torch.eye(3, dtype=torch.bfloat16).expand(edge_index.shape[1], 3, 3).clone()
 
-    scalars_out, vectors_out = conv(
-        node_scalars,
-        node_vectors,
-        edge_index,
-        edge_scalars,
-        edge_vectors,
-        edge_frames,
-    )
+    node_features = ScalarVector(node_scalars, node_vectors)
+    edge_features = ScalarVector(edge_scalars, edge_vectors)
 
-    assert scalars_out.dtype is torch.bfloat16
-    assert vectors_out.dtype is torch.bfloat16
+    output = conv(node_features, edge_features, edge_index, edge_frames)
+
+    assert output.scalars.dtype is torch.bfloat16
+    assert output.vectors.dtype is torch.bfloat16
 
 
 def test_gcpnet_encoder_supports_bfloat16_inputs() -> None:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Iterable
+from typing import Iterable, Optional
 
 import torch
 from torch import Tensor
@@ -80,4 +80,83 @@ def broadcast_param(param: Tensor, target_dims: Iterable[int]) -> Tensor:
     return param.view(*shape, -1)
 
 
-__all__ = ["safe_norm", "unit", "vector_linear", "apply_gating", "broadcast_param"]
+def scalarize(vectors: Tensor, frames: Tensor) -> Tensor:
+    """Project vector features onto local frames to obtain scalars.
+
+    Parameters
+    ----------
+    vectors:
+        Tensor of shape ``(E, C, 3)`` storing vector channels aligned with
+        individual edges.  The final dimension must contain the 3D components.
+    frames:
+        Tensor of shape ``(E, 3, 3)`` storing an orthonormal frame per edge.
+
+    Returns
+    -------
+    Tensor
+        Scalar representation of the projected vectors with shape
+        ``(E, C * 3)``.  Each vector channel contributes its projections onto
+        the three frame axes.
+    """
+
+    if vectors.size(-1) != 3:
+        raise ValueError("scalarize expects vectors with 3D components")
+    if frames.ndim != 3 or frames.size(-1) != 3 or frames.size(-2) != 3:
+        raise ValueError("frames must have shape (E, 3, 3)")
+
+    if vectors.size(-2) == 0:
+        return vectors.new_zeros(vectors.shape[:-2] + (0,))
+
+    projected = torch.einsum("eij,ecj->eci", frames.to(vectors.dtype), vectors)
+    return projected.reshape(vectors.shape[0], -1)
+
+
+def vectorize(
+    vectors: Tensor,
+    weight: Optional[Tensor],
+    *,
+    gate: Optional[Tensor] = None,
+    vector_gate: bool = True,
+    enable_e3_equivariance: bool = True,
+) -> Tensor:
+    """Reconstruct full-resolution vectors from downsampled channels.
+
+    Parameters
+    ----------
+    vectors:
+        Tensor containing the downsampled vector channels.
+    weight:
+        Optional linear projection used to lift the vectors back to the
+        original dimensionality.  If ``None`` the returned tensor is zero.
+    gate:
+        Optional multiplicative gates applied channel-wise.
+    vector_gate:
+        Whether the provided gate should modulate the reconstructed vectors.
+    enable_e3_equivariance:
+        Toggle allowing callers to switch off the equivariant pathway entirely.
+    """
+
+    if weight is None or weight.numel() == 0:
+        out_channels = weight.size(0) if weight is not None else 0
+        shape = vectors.shape[:-2] + (out_channels, 3)
+        return vectors.new_zeros(shape)
+
+    if not enable_e3_equivariance:
+        shape = vectors.shape[:-2] + (weight.size(0), 3)
+        return vectors.new_zeros(shape)
+
+    lifted = vector_linear(vectors, weight)
+    if gate is not None and vector_gate:
+        lifted = apply_gating(lifted, gate)
+    return lifted
+
+
+__all__ = [
+    "safe_norm",
+    "unit",
+    "vector_linear",
+    "apply_gating",
+    "broadcast_param",
+    "scalarize",
+    "vectorize",
+]

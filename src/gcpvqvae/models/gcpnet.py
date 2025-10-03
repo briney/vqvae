@@ -8,7 +8,7 @@ from typing import Dict, Optional, Tuple, Union
 import torch
 from torch import Tensor, nn
 
-from .gcpcore import apply_gating, safe_norm, vector_linear
+from .gcpcore import scalarize, safe_norm, vector_linear, vectorize
 from gcpvqvae.data.batch import EdgeStorage, ProteinBatch
 from gcpvqvae.geometry.ops import centralize, ensure_edge_frames, localize
 
@@ -46,6 +46,28 @@ class ScalarVector:
         return ScalarVector(scalars, vectors)
 
 
+class VectorDropout(nn.Module):
+    """Dropout variant that shares the mask across 3D vector components."""
+
+    def __init__(self, p: float = 0.0, *, enabled: bool = True) -> None:
+        super().__init__()
+        self.p = float(p)
+        self.enabled = enabled and self.p > 0.0
+
+    def forward(self, vectors: Tensor) -> Tensor:
+        if not self.enabled or self.p <= 0.0 or not self.training:
+            return vectors
+        if vectors.numel() == 0:
+            return vectors
+        if self.p >= 1.0:
+            return torch.zeros_like(vectors)
+
+        keep_prob = 1.0 - self.p
+        mask = torch.rand(vectors.shape[:-1], device=vectors.device, dtype=torch.float32)
+        mask = (mask < keep_prob).to(vectors.dtype) / keep_prob
+        return vectors * mask.unsqueeze(-1)
+
+
 class VectorLayerNorm(nn.Module):
     """LayerNorm-style normalisation for vector features."""
 
@@ -66,39 +88,66 @@ class VectorLayerNorm(nn.Module):
         return scaled * self.weight.view(*shape)
 
 
-def _gather_edge_vectors(
-    node_vectors: Tensor,
-    edge_index: Tensor,
-    edge_vectors: Tensor,
-    *,
-    edge_vector_channels: int,
-) -> Tensor:
-    src, _ = edge_index
+class GCPLayerNorm(nn.Module):
+    """LayerNorm wrapper that handles coupled scalar/vector feature sets."""
 
-    node_vec = node_vectors.index_select(0, src)
-    if edge_vector_channels > 0:
-        if edge_vectors.numel() == 0:
-            edge_vec = torch.zeros(
-                (src.numel(), edge_vector_channels, 3),
-                dtype=node_vectors.dtype,
-                device=node_vectors.device,
-            )
-        else:
-            if edge_vectors.ndim == 2:
-                edge_vec = edge_vectors.unsqueeze(1)
-            else:
-                edge_vec = edge_vectors
-            if edge_vec.size(1) != edge_vector_channels:
-                raise ValueError("edge_vectors has incompatible channel dimension")
-    else:
-        edge_vec = torch.zeros(
-            (src.numel(), 0, 3),
-            dtype=node_vectors.dtype,
-            device=node_vectors.device,
+    def __init__(
+        self,
+        scalar_dim: int,
+        vector_dim: int,
+        *,
+        normalize_scalars: bool = True,
+        normalize_vectors: bool = True,
+        eps: float = 1e-6,
+    ) -> None:
+        super().__init__()
+        self.scalar_norm: Optional[nn.LayerNorm]
+        self.vector_norm: Optional[VectorLayerNorm]
+
+        self.scalar_norm = nn.LayerNorm(scalar_dim, eps=eps) if normalize_scalars and scalar_dim > 0 else None
+        self.vector_norm = (
+            VectorLayerNorm(vector_dim, eps=eps)
+            if normalize_vectors and vector_dim > 0
+            else None
         )
 
-    combined_vectors = torch.cat((node_vec, edge_vec), dim=1)
-    return combined_vectors
+    def forward(self, features: ScalarVector) -> ScalarVector:
+        scalars = features.scalars
+        vectors = features.vectors
+        scalar_dtype = scalars.dtype
+        vector_dtype = vectors.dtype
+        if self.scalar_norm is not None:
+            scalars = self.scalar_norm(scalars.to(self.scalar_norm.weight.dtype)).to(scalar_dtype)
+        if self.vector_norm is not None:
+            vectors = self.vector_norm(vectors.to(self.vector_norm.weight.dtype)).to(vector_dtype)
+        return ScalarVector(scalars, vectors)
+
+
+class GCPDropout(nn.Module):
+    """Coupled dropout module for scalar/vector feature tuples."""
+
+    def __init__(
+        self,
+        p: float = 0.0,
+        *,
+        drop_scalars: bool = True,
+        drop_vectors: bool = True,
+    ) -> None:
+        super().__init__()
+        self.scalar_dropout: Optional[nn.Dropout]
+        self.vector_dropout: Optional[VectorDropout]
+
+        self.scalar_dropout = nn.Dropout(p) if drop_scalars and p > 0.0 else None
+        self.vector_dropout = VectorDropout(p, enabled=drop_vectors and p > 0.0) if drop_vectors else None
+
+    def forward(self, features: ScalarVector) -> ScalarVector:
+        scalars = features.scalars
+        vectors = features.vectors
+        if self.scalar_dropout is not None:
+            scalars = self.scalar_dropout(scalars)
+        if self.vector_dropout is not None:
+            vectors = self.vector_dropout(vectors)
+        return ScalarVector(scalars, vectors)
 
 
 class GCPEmbedding(nn.Module):
@@ -196,7 +245,7 @@ class GCPEmbedding(nn.Module):
 
 
 class GCPConv(nn.Module):
-    """Single GCP convolution layer implementing Algorithm 1 from GCPNet."""
+    """Single GCP convolution layer operating on ``ScalarVector`` features."""
 
     def __init__(
         self,
@@ -208,6 +257,9 @@ class GCPConv(nn.Module):
         hidden_scalar_dim: int,
         hidden_vector_channels: int,
         dropout: float = 0.0,
+        vector_gate: bool = True,
+        enable_e3_equivariance: bool = True,
+        node_inputs: bool = True,
     ) -> None:
         super().__init__()
 
@@ -216,121 +268,193 @@ class GCPConv(nn.Module):
         self.edge_scalar_dim = edge_scalar_dim
         self.edge_vector_channels = edge_vector_channels
         self.hidden_vector_channels = hidden_vector_channels
+        self.vector_gate = vector_gate
+        self.enable_e3_equivariance = enable_e3_equivariance
+        self.node_inputs = node_inputs
 
-        combined_vector_dim = vector_dim + edge_vector_channels
+        combined_vector_dim = (vector_dim if node_inputs else 0) + edge_vector_channels
+        if hidden_vector_channels > 0 and combined_vector_dim > 0:
+            self.vector_down = nn.Parameter(
+                torch.randn(hidden_vector_channels, combined_vector_dim) * 0.02
+            )
+            self.message_vector_channels = hidden_vector_channels
+        else:
+            self.vector_down = None
+            self.message_vector_channels = 0
 
-        self.scalar_norm = nn.LayerNorm(scalar_dim)
-        self.vector_norm = VectorLayerNorm(vector_dim)
+        if vector_dim > 0 and self.message_vector_channels > 0:
+            self.vector_up = nn.Parameter(
+                torch.randn(vector_dim, self.message_vector_channels) * 0.02
+            )
+        else:
+            self.vector_up = None
 
-        self.vec_down = nn.Parameter(torch.randn(hidden_vector_channels, combined_vector_dim) * 0.02)
-        self.vec_signature = nn.Parameter(torch.randn(3, combined_vector_dim) * 0.02)
-        self.vec_up = nn.Parameter(torch.randn(vector_dim, hidden_vector_channels) * 0.02)
+        self.node_norm = GCPLayerNorm(scalar_dim, vector_dim)
+        self.edge_norm = GCPLayerNorm(edge_scalar_dim, edge_vector_channels)
 
-        scalar_in_dim = scalar_dim + 9 + hidden_vector_channels + edge_scalar_dim
+        scalar_in_dim = 0
+        if node_inputs and scalar_dim > 0:
+            scalar_in_dim += scalar_dim
+        scalar_in_dim += self.message_vector_channels * 3
+        scalar_in_dim += self.message_vector_channels
+        scalar_in_dim += edge_scalar_dim
 
-        self.scalar_mlp = nn.Sequential(
-            nn.Linear(scalar_in_dim, hidden_scalar_dim, bias=False),
-            nn.SiLU(),
-            nn.Linear(hidden_scalar_dim, scalar_dim, bias=False),
-        )
+        if scalar_dim > 0 and scalar_in_dim == 0:
+            raise ValueError("GCPConv requires a non-empty scalar input when scalar_dim > 0")
 
-        self.gate_mlp = nn.Sequential(
-            nn.Linear(scalar_in_dim, hidden_scalar_dim, bias=False),
-            nn.SiLU(),
-            nn.Linear(hidden_scalar_dim, vector_dim, bias=False),
-        )
+        if scalar_dim > 0 and scalar_in_dim > 0:
+            self.scalar_mlp: Optional[nn.Module] = nn.Sequential(
+                nn.Linear(scalar_in_dim, hidden_scalar_dim, bias=False),
+                nn.SiLU(),
+                nn.Linear(hidden_scalar_dim, scalar_dim, bias=False),
+            )
+        else:
+            self.scalar_mlp = None
 
-        self.dropout = nn.Dropout(dropout)
-        self.vector_dropout = nn.Dropout(dropout)
+        if vector_gate and vector_dim > 0 and scalar_in_dim > 0:
+            self.gate_mlp: Optional[nn.Module] = nn.Sequential(
+                nn.Linear(scalar_in_dim, hidden_scalar_dim, bias=False),
+                nn.SiLU(),
+                nn.Linear(hidden_scalar_dim, vector_dim, bias=False),
+            )
+        else:
+            self.gate_mlp = None
+
+        self.update_dropout = GCPDropout(dropout)
 
     def forward(
         self,
-        node_scalars: Tensor,
-        node_vectors: Tensor,
+        nodes: ScalarVector,
+        edges: ScalarVector,
         edge_index: Tensor,
-        edge_scalars: Tensor,
-        edge_vectors: Tensor,
         edge_frames: Tensor,
-    ) -> Tuple[Tensor, Tensor]:
-        if node_scalars.shape[0] != node_vectors.shape[0]:
+        mask: Optional[Tensor] = None,
+    ) -> ScalarVector:
+        if nodes.scalars.shape[0] != nodes.vectors.shape[0]:
             raise ValueError("Scalar and vector node features must align")
 
         src, dst = edge_index
-        num_nodes = node_scalars.shape[0]
-        dtype = node_scalars.dtype
-        device = node_scalars.device
-        vector_dtype = node_vectors.dtype
+        num_nodes = nodes.scalars.shape[0]
+        device = nodes.scalars.device
+        scalar_dtype = nodes.scalars.dtype
+        vector_dtype = nodes.vectors.dtype
 
-        if src.numel() == 0:
+        compute_scalar_dtype = torch.float32 if scalar_dtype in {torch.float16, torch.bfloat16} else scalar_dtype
+        compute_vector_dtype = torch.float32 if vector_dtype in {torch.float16, torch.bfloat16} else vector_dtype
+
+        norm_nodes = self.node_norm(nodes)
+        norm_edges = self.edge_norm(edges)
+
+        node_context = (
+            norm_nodes.scalars.to(scalar_dtype)
+            if self.node_inputs and norm_nodes.scalars.numel() > 0
+            else nodes.scalars.new_zeros((num_nodes, 0))
+        )
+
+        counts = torch.zeros((num_nodes, 1), dtype=compute_scalar_dtype, device=device)
+        if dst.numel() > 0:
+            ones = torch.ones((dst.numel(), 1), dtype=compute_scalar_dtype, device=device)
+            counts.index_add_(0, dst, ones)
+        counts = torch.clamp(counts, min=1.0)
+
+        combined_vectors = []
+        if self.node_inputs and norm_nodes.vectors.size(-2) > 0:
+            combined_vectors.append(norm_nodes.vectors.index_select(0, src))
+        if norm_edges.vectors.size(-2) > 0:
+            combined_vectors.append(norm_edges.vectors)
+
+        if self.vector_down is not None and combined_vectors:
+            edge_vectors = torch.cat(combined_vectors, dim=-2)
+            down_vectors = vector_linear(edge_vectors, self.vector_down).to(vector_dtype)
+            down_vectors_compute = down_vectors.to(compute_vector_dtype)
             agg_vectors = torch.zeros(
-                (num_nodes, self.hidden_vector_channels, 3), dtype=node_vectors.dtype, device=device
+                (num_nodes, self.message_vector_channels, 3),
+                dtype=compute_vector_dtype,
+                device=device,
             )
-            agg_q = torch.zeros((num_nodes, 9), dtype=dtype, device=device)
-            agg_norm = torch.zeros((num_nodes, self.hidden_vector_channels), dtype=dtype, device=device)
-            agg_edge = torch.zeros((num_nodes, self.edge_scalar_dim), dtype=dtype, device=device)
-            counts = torch.ones((num_nodes, 1), dtype=dtype, device=device)
-        else:
-            norm_scalars = self.scalar_norm(node_scalars).to(dtype)
-            norm_vectors = self.vector_norm(node_vectors).to(vector_dtype)
+            agg_vectors.index_add_(0, dst, down_vectors_compute)
+            agg_vectors = (agg_vectors / counts.to(compute_vector_dtype).unsqueeze(-1)).to(vector_dtype)
 
-            combined_vectors = _gather_edge_vectors(
-                norm_vectors, edge_index, edge_vectors, edge_vector_channels=self.edge_vector_channels
+            down_norm = safe_norm(down_vectors, dim=-1).to(compute_scalar_dtype)
+            agg_norm = torch.zeros(
+                (num_nodes, self.message_vector_channels),
+                dtype=compute_scalar_dtype,
+                device=device,
             )
-
-            down = vector_linear(combined_vectors, self.vec_down).to(vector_dtype)
-            down_norm = safe_norm(down, dim=-1).to(dtype)
-
-            signature_vectors = vector_linear(combined_vectors, self.vec_signature).to(edge_frames.dtype)
-            orient = torch.einsum("eac,ebc->eab", signature_vectors, edge_frames).reshape(-1, 9)
-            orient = orient.to(dtype)
-
-            counts = torch.zeros((num_nodes, 1), dtype=dtype, device=device)
-            counts.index_add_(0, dst, torch.ones((dst.numel(), 1), dtype=dtype, device=device))
-            counts = torch.clamp(counts, min=1.0)
-
-            agg_vectors = torch.zeros(
-                (num_nodes, self.hidden_vector_channels, 3), dtype=vector_dtype, device=device
-            )
-            agg_vectors.index_add_(0, dst, down)
-            agg_vectors = agg_vectors / counts.unsqueeze(-1)
-
-            agg_q = torch.zeros((num_nodes, 9), dtype=dtype, device=device)
-            agg_q.index_add_(0, dst, orient)
-            agg_q = agg_q / counts
-
-            agg_norm = torch.zeros((num_nodes, self.hidden_vector_channels), dtype=dtype, device=device)
             agg_norm.index_add_(0, dst, down_norm)
-            agg_norm = agg_norm / counts
+            agg_norm = (agg_norm / counts).to(scalar_dtype)
 
-            if self.edge_scalar_dim > 0:
-                if edge_scalars.numel() == 0:
-                    agg_edge = torch.zeros((num_nodes, self.edge_scalar_dim), dtype=dtype, device=device)
-                else:
-                    agg_edge = torch.zeros((num_nodes, self.edge_scalar_dim), dtype=dtype, device=device)
-                    agg_edge.index_add_(0, dst, edge_scalars.to(dtype))
-                    agg_edge = agg_edge / counts
-            else:
-                agg_edge = torch.zeros((num_nodes, 0), dtype=dtype, device=device)
+            projected = scalarize(down_vectors, edge_frames).to(compute_scalar_dtype)
+            agg_projected = torch.zeros(
+                (num_nodes, self.message_vector_channels * 3),
+                dtype=compute_scalar_dtype,
+                device=device,
+            )
+            agg_projected.index_add_(0, dst, projected)
+            agg_projected = (agg_projected / counts).to(scalar_dtype)
+        else:
+            agg_vectors = nodes.vectors.new_zeros((num_nodes, self.message_vector_channels, 3))
+            agg_norm = nodes.scalars.new_zeros((num_nodes, self.message_vector_channels))
+            agg_projected = nodes.scalars.new_zeros((num_nodes, self.message_vector_channels * 3))
 
-            norm_scalars = norm_scalars  # retained for residual below
+        if norm_edges.scalars.numel() > 0 and dst.numel() > 0:
+            edge_scalars = norm_edges.scalars.to(compute_scalar_dtype)
+            agg_edge = torch.zeros((num_nodes, self.edge_scalar_dim), dtype=compute_scalar_dtype, device=device)
+            agg_edge.index_add_(0, dst, edge_scalars)
+            agg_edge = (agg_edge / counts).to(scalar_dtype)
+        else:
+            agg_edge = nodes.scalars.new_zeros((num_nodes, self.edge_scalar_dim))
 
-        if src.numel() == 0:
-            norm_scalars = self.scalar_norm(node_scalars).to(dtype)
+        scalar_inputs = []
+        if node_context.numel() > 0:
+            scalar_inputs.append(node_context)
+        if agg_projected.numel() > 0:
+            scalar_inputs.append(agg_projected)
+        if agg_norm.numel() > 0:
+            scalar_inputs.append(agg_norm)
+        if agg_edge.numel() > 0:
+            scalar_inputs.append(agg_edge)
 
-        scalar_input = torch.cat((norm_scalars, agg_q, agg_norm, agg_edge), dim=-1)
+        if scalar_inputs:
+            scalar_input = torch.cat(scalar_inputs, dim=-1)
+        else:
+            scalar_input = nodes.scalars.new_zeros((num_nodes, 0))
 
-        mlp_input_dtype = self.scalar_mlp[0].weight.dtype
-        gate_input_dtype = self.gate_mlp[0].weight.dtype
+        if self.scalar_mlp is not None and scalar_input.numel() > 0:
+            mlp_dtype = self.scalar_mlp[0].weight.dtype  # type: ignore[index]
+            scalar_update = self.scalar_mlp(scalar_input.to(mlp_dtype)).to(scalar_dtype)
+        else:
+            scalar_update = nodes.scalars.new_zeros_like(nodes.scalars)
 
-        scalar_update = self.scalar_mlp(scalar_input.to(mlp_input_dtype)).to(dtype)
-        scalars_out = node_scalars + self.dropout(scalar_update)
+        gate: Optional[Tensor]
+        if self.gate_mlp is not None and scalar_input.numel() > 0:
+            gate_dtype = self.gate_mlp[0].weight.dtype  # type: ignore[index]
+            gate = torch.sigmoid(self.gate_mlp(scalar_input.to(gate_dtype))).to(vector_dtype)
+        else:
+            gate = None
 
-        vector_update = vector_linear(agg_vectors, self.vec_up).to(vector_dtype)
-        gate = torch.sigmoid(self.gate_mlp(scalar_input.to(gate_input_dtype))).to(vector_dtype)
-        gated = apply_gating(vector_update, gate)
-        vectors_out = node_vectors + self.vector_dropout(gated)
+        if self.vector_up is not None:
+            vector_update = vectorize(
+                agg_vectors,
+                self.vector_up,
+                gate=gate,
+                vector_gate=self.vector_gate,
+                enable_e3_equivariance=self.enable_e3_equivariance,
+            ).to(vector_dtype)
+        else:
+            vector_update = nodes.vectors.new_zeros_like(nodes.vectors)
 
-        return scalars_out, vectors_out
+        updates = ScalarVector(scalar_update, vector_update)
+        updates = self.update_dropout(updates)
+
+        scalars_out = nodes.scalars + updates.scalars
+        vectors_out = nodes.vectors + updates.vectors
+
+        if mask is not None:
+            scalars_out = scalars_out * mask.unsqueeze(-1).to(scalars_out.dtype)
+            vectors_out = vectors_out * mask.unsqueeze(-1).unsqueeze(-1).to(vectors_out.dtype)
+
+        return ScalarVector(scalars_out, vectors_out)
 
 
 class GCPMessagePassing(nn.Module):
@@ -357,6 +481,9 @@ class GCPMessagePassing(nn.Module):
                     hidden_scalar_dim=bottleneck_scalar,
                     hidden_vector_channels=bottleneck_vector,
                     dropout=config.dropout,
+                    vector_gate=config.vector_gate,
+                    enable_e3_equivariance=config.enable_e3_equivariance,
+                    node_inputs=config.node_inputs,
                 ),
                 GCPConv(
                     scalar_dim,
@@ -366,6 +493,9 @@ class GCPMessagePassing(nn.Module):
                     hidden_scalar_dim=scalar_dim,
                     hidden_vector_channels=vector_dim,
                     dropout=config.dropout,
+                    vector_gate=config.vector_gate,
+                    enable_e3_equivariance=config.enable_e3_equivariance,
+                    node_inputs=config.node_inputs,
                 ),
                 GCPConv(
                     scalar_dim,
@@ -375,6 +505,9 @@ class GCPMessagePassing(nn.Module):
                     hidden_scalar_dim=scalar_dim,
                     hidden_vector_channels=vector_dim,
                     dropout=config.dropout,
+                    vector_gate=config.vector_gate,
+                    enable_e3_equivariance=config.enable_e3_equivariance,
+                    node_inputs=config.node_inputs,
                 ),
                 GCPConv(
                     scalar_dim,
@@ -384,6 +517,9 @@ class GCPMessagePassing(nn.Module):
                     hidden_scalar_dim=bottleneck_scalar,
                     hidden_vector_channels=bottleneck_vector,
                     dropout=config.dropout,
+                    vector_gate=config.vector_gate,
+                    enable_e3_equivariance=config.enable_e3_equivariance,
+                    node_inputs=config.node_inputs,
                 ),
             ]
         )
@@ -441,22 +577,12 @@ class GCPMessagePassing(nn.Module):
         edge_frames: Tensor,
         mask: Optional[Tensor] = None,
     ) -> Tuple[ScalarVector, ScalarVector]:
-        scalars = features.scalars
-        vectors = features.vectors
+        updated = features
         for layer in self.layers:
-            scalars, vectors = layer(
-                scalars,
-                vectors,
-                edge_index,
-                edges.scalars,
-                edges.vectors,
-                edge_frames,
-            )
+            updated = layer(updated, edges, edge_index, edge_frames, mask=mask)
             if mask is not None:
-                scalars = scalars * mask.unsqueeze(-1)
-                vectors = vectors * mask.unsqueeze(-1).unsqueeze(-1)
+                updated = updated.apply_mask(mask)
 
-        updated = ScalarVector(scalars, vectors)
         aggregated = self._aggregate(updated, edge_index, mask)
         return updated, aggregated
 
@@ -474,6 +600,9 @@ class GCPNetConfig:
     latent_dim: int = 256
     layers: int = 6
     dropout: float = 0.0
+    vector_gate: bool = True
+    enable_e3_equivariance: bool = True
+    node_inputs: bool = True
     displacement_head: bool = False
     prenorm: bool = True
     init: str = "random"
@@ -490,15 +619,13 @@ class GCPInteractions(nn.Module):
         self.config = config
         self.prenorm = config.prenorm
 
-        if self.prenorm:
-            self.scalar_norm = nn.LayerNorm(config.hidden_scalar_dim)
-            self.vector_norm = VectorLayerNorm(config.hidden_vector_dim)
-        else:
-            self.scalar_norm = None
-            self.vector_norm = None
+        self.prenorm_layer = GCPLayerNorm(
+            config.hidden_scalar_dim,
+            config.hidden_vector_dim,
+        ) if self.prenorm else None
 
         self.message_passing = GCPMessagePassing(config)
-        self.residual_dropout = nn.Dropout(config.dropout)
+        self.residual_dropout = GCPDropout(config.dropout)
 
         self.skip_proj = nn.Linear(config.hidden_scalar_dim * 2, config.hidden_scalar_dim, bias=False)
         self.skip_vector_proj = nn.Parameter(
@@ -515,6 +642,9 @@ class GCPInteractions(nn.Module):
                     hidden_scalar_dim=config.hidden_scalar_dim * 2,
                     hidden_vector_channels=config.hidden_vector_dim,
                     dropout=config.dropout,
+                    vector_gate=config.vector_gate,
+                    enable_e3_equivariance=config.enable_e3_equivariance,
+                    node_inputs=config.node_inputs,
                 ),
                 GCPConv(
                     config.hidden_scalar_dim,
@@ -524,11 +654,14 @@ class GCPInteractions(nn.Module):
                     hidden_scalar_dim=config.hidden_scalar_dim * 2,
                     hidden_vector_channels=config.hidden_vector_dim,
                     dropout=config.dropout,
+                    vector_gate=config.vector_gate,
+                    enable_e3_equivariance=config.enable_e3_equivariance,
+                    node_inputs=config.node_inputs,
                 ),
             ]
         )
 
-        self.feedforward_dropout = nn.Dropout(config.dropout)
+        self.feedforward_dropout = GCPDropout(config.dropout)
 
         if config.displacement_head:
             self.node_position_head = nn.Linear(config.hidden_scalar_dim, 3, bias=False)
@@ -545,19 +678,18 @@ class GCPInteractions(nn.Module):
         skip: Optional[ScalarVector] = None,
     ) -> Tuple[ScalarVector, ScalarVector, Optional[Tensor]]:
         x = features
-        if self.prenorm:
-            scalars = self.scalar_norm(x.scalars)
-            vectors = self.vector_norm(x.vectors).to(x.vectors.dtype)
-            x = ScalarVector(scalars, vectors)
+        if self.prenorm_layer is not None:
+            x = self.prenorm_layer(features)
 
         message_out, aggregated = self.message_passing(x, edges, edge_index, edge_frames, mask=mask)
         if mask is not None:
             message_out = message_out.apply_mask(mask)
             aggregated = aggregated.apply_mask(mask)
 
+        message_update = self.residual_dropout(message_out)
         updated = ScalarVector(
-            features.scalars + self.residual_dropout(message_out.scalars),
-            features.vectors + self.residual_dropout(message_out.vectors),
+            features.scalars + message_update.scalars,
+            features.vectors + message_update.vectors,
         )
 
         skip_features = skip if skip is not None else aggregated
@@ -569,25 +701,17 @@ class GCPInteractions(nn.Module):
         projected_vectors = vector_linear(combined_vectors, self.skip_vector_proj).to(updated.vectors.dtype)
         feed_forward_input = ScalarVector(projected_scalars, projected_vectors)
 
-        ff_scalars, ff_vectors = feed_forward_input.scalars, feed_forward_input.vectors
+        feed_forward_output = feed_forward_input
         for layer in self.feed_forward:
-            ff_scalars, ff_vectors = layer(
-                ff_scalars,
-                ff_vectors,
-                edge_index,
-                edges.scalars,
-                edges.vectors,
-                edge_frames,
-            )
+            feed_forward_output = layer(feed_forward_output, edges, edge_index, edge_frames, mask=mask)
             if mask is not None:
-                ff_scalars = ff_scalars * mask.unsqueeze(-1)
-                ff_vectors = ff_vectors * mask.unsqueeze(-1).unsqueeze(-1)
+                feed_forward_output = feed_forward_output.apply_mask(mask)
 
-        feed_forward_output = ScalarVector(ff_scalars, ff_vectors)
+        feed_forward_output = self.feedforward_dropout(feed_forward_output)
 
         result = ScalarVector(
-            updated.scalars + self.feedforward_dropout(feed_forward_output.scalars),
-            updated.vectors + self.feedforward_dropout(feed_forward_output.vectors),
+            updated.scalars + feed_forward_output.scalars,
+            updated.vectors + feed_forward_output.vectors,
         )
 
         displacement: Optional[Tensor]
@@ -724,6 +848,9 @@ __all__ = [
     "GCPNetEncoder",
     "GCPNetConfig",
     "GCPConv",
+    "GCPLayerNorm",
+    "GCPDropout",
+    "VectorDropout",
     "VectorLayerNorm",
     "ScalarVector",
     "GCPEmbedding",
