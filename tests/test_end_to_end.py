@@ -20,6 +20,11 @@ from gcpvqvae.models.gcpvqvae import (
     TransformerConfig,
     VectorQuantizerConfig,
 )
+from gcpvqvae.models.gcpnet import (
+    GCPEmbeddingConfig,
+    GCPFeedForwardConfig,
+    GCPMessagePassingConfig,
+)
 from gcpvqvae.models.vq import VectorQuantizer
 
 
@@ -59,12 +64,16 @@ def _build_roundtrip_structure(path: Path) -> None:
 
 def _make_small_config() -> GCPVQVAEConfig:
     gcp_cfg = GCPNetConfig(
-        hidden_scalar_dim=32,
-        hidden_vector_dim=4,
+        node_scalar_dim=6,
+        node_vector_dim=3,
         edge_scalar_dim=8,
+        edge_scalar_input_dim=8,
         edge_vector_dim=1,
+        embedding=GCPEmbeddingConfig(scalar_dim=32, vector_dim=4),
+        message_passing=GCPMessagePassingConfig(scalar_dim=32, vector_dim=4),
+        feed_forward=GCPFeedForwardConfig(bottleneck_factor=2.0),
         latent_dim=32,
-        layers=2,
+        num_layers=2,
     )
     vq_cfg = VectorQuantizerConfig(num_codes=16, dim=32, beta=0.25, decay=0.9, kmeans_iters=1)
     enc_cfg = TransformerConfig(

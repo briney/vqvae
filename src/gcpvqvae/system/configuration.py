@@ -59,6 +59,7 @@ def build_model_config(raw: Optional[Dict[str, Any]]) -> GCPVQVAEConfig:
                 setattr(config, key, update_dataclass(current, value))
             else:
                 setattr(config, key, value)
+        config.gcp.__post_init__()
         config.rotation.input_dim = None
         config.__post_init__()
     return config

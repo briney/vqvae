@@ -80,6 +80,7 @@ class GCPVQVAEConfig:
     data: DataPipelineConfig = field(default_factory=DataPipelineConfig)
 
     def __post_init__(self) -> None:
+        self.gcp.__post_init__()
         # Ensure dimensional consistency between the sub-modules.
         if self.adapter.enabled:
             target_dim = self.adapter.output_dim or self.vq.dim

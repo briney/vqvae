@@ -10,13 +10,21 @@ data:
 
 model:
   gcp:
-    hidden_scalar_dim: 128
-    hidden_vector_dim: 16
+    node_scalar_dim: 49
+    node_vector_dim: 2
     edge_scalar_dim: 32
     edge_scalar_input_dim: 8
     edge_vector_dim: 1
+    embedding:
+      scalar_dim: 128
+      vector_dim: 16
+    message_passing:
+      scalar_dim: 128
+      vector_dim: 16
+    feed_forward:
+      bottleneck_factor: 2.0
     latent_dim: 256
-    layers: 6
+    num_layers: 6
     init: random
     init_checkpoint: null
     strict_init: true

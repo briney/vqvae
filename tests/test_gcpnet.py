@@ -2,6 +2,9 @@ import torch
 
 from gcpvqvae.models.gcpnet import (
     DEFAULT_EDGE_SCALAR_INPUT_DIM,
+    GCPEmbeddingConfig,
+    GCPFeedForwardConfig,
+    GCPMessagePassingConfig,
     GCPNetConfig,
     GCPNetEncoder,
 )
@@ -66,7 +69,17 @@ def test_gcpconv_supports_bfloat16_inputs() -> None:
 
 
 def test_gcpnet_encoder_supports_bfloat16_inputs() -> None:
-    config = GCPNetConfig(layers=2, hidden_scalar_dim=16, hidden_vector_dim=8, latent_dim=32)
+    config = GCPNetConfig(
+        node_scalar_dim=6,
+        node_vector_dim=3,
+        edge_scalar_dim=8,
+        edge_scalar_input_dim=8,
+        embedding=GCPEmbeddingConfig(scalar_dim=16, vector_dim=8),
+        message_passing=GCPMessagePassingConfig(scalar_dim=16, vector_dim=8),
+        feed_forward=GCPFeedForwardConfig(bottleneck_factor=2.0),
+        latent_dim=32,
+        num_layers=2,
+    )
     encoder = GCPNetEncoder(config)
 
     num_nodes = 5

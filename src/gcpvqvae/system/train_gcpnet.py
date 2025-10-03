@@ -49,6 +49,7 @@ class PretrainModelConfig:
     rotation: RotationHeadConfig = field(default_factory=RotationHeadConfig)
 
     def __post_init__(self) -> None:
+        self.gcp.__post_init__()
         if self.rotation.input_dim is None:
             self.rotation.input_dim = self.gcp.latent_dim
 
@@ -143,8 +144,7 @@ def _prepare_model_config(raw: Mapping[str, Any]) -> PretrainModelConfig:
             setattr(config, key, update_dataclass(current, value))
         else:
             setattr(config, key, value)
-    if config.rotation.input_dim is None:
-        config.rotation.input_dim = config.gcp.latent_dim
+    config.__post_init__()
     return config
 
 

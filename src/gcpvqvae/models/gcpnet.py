@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, Optional
 
 import torch
@@ -12,7 +12,34 @@ from .gcpcore import apply_gating, safe_norm, vector_linear
 
 
 # Default number of scalar edge features produced by the featurisation pipeline.
-DEFAULT_EDGE_SCALAR_INPUT_DIM = 8
+DEFAULT_EDGE_SCALAR_INPUT_DIM = 9
+
+
+@dataclass
+class GCPEmbeddingConfig:
+    """Widths used when projecting raw node features into the latent space."""
+
+    scalar_dim: int = 128
+    vector_dim: int = 16
+
+
+@dataclass
+class GCPMessagePassingConfig:
+    """Hidden representation configuration for the GCP message passing blocks."""
+
+    scalar_dim: int = 128
+    vector_dim: int = 16
+    vector_hidden_channels: Optional[int] = None
+    vector_bottleneck_factor: float = 1.0
+
+
+@dataclass
+class GCPFeedForwardConfig:
+    """Feed-forward widths used inside each GCP convolution."""
+
+    hidden_dim: Optional[int] = None
+    gate_hidden_dim: Optional[int] = None
+    bottleneck_factor: float = 2.0
 
 
 class VectorLayerNorm(nn.Module):
@@ -82,6 +109,7 @@ class GCPConv(nn.Module):
         edge_vector_channels: int,
         hidden_scalar_dim: int,
         hidden_vector_channels: int,
+        gate_hidden_dim: Optional[int] = None,
         dropout: float = 0.0,
     ) -> None:
         super().__init__()
@@ -91,6 +119,16 @@ class GCPConv(nn.Module):
         self.edge_scalar_dim = edge_scalar_dim
         self.edge_vector_channels = edge_vector_channels
         self.hidden_vector_channels = hidden_vector_channels
+
+        if hidden_scalar_dim <= 0:
+            raise ValueError("hidden_scalar_dim must be positive")
+        if hidden_vector_channels <= 0:
+            raise ValueError("hidden_vector_channels must be positive")
+
+        if gate_hidden_dim is None:
+            gate_hidden_dim = hidden_scalar_dim
+        if gate_hidden_dim <= 0:
+            raise ValueError("gate_hidden_dim must be positive")
 
         combined_vector_dim = vector_dim + edge_vector_channels
 
@@ -110,9 +148,9 @@ class GCPConv(nn.Module):
         )
 
         self.gate_mlp = nn.Sequential(
-            nn.Linear(scalar_in_dim, hidden_scalar_dim, bias=False),
+            nn.Linear(scalar_in_dim, gate_hidden_dim, bias=False),
             nn.SiLU(),
-            nn.Linear(hidden_scalar_dim, vector_dim, bias=False),
+            nn.Linear(gate_hidden_dim, vector_dim, bias=False),
         )
 
         self.dropout = nn.Dropout(dropout)
@@ -210,20 +248,51 @@ class GCPConv(nn.Module):
 
 @dataclass
 class GCPNetConfig:
-    node_scalar_dim: int = 6
-    node_vector_dim: int = 3
-    edge_scalar_dim: int = 8
+    node_scalar_dim: int = 49
+    node_vector_dim: int = 2
+    edge_scalar_dim: int = 9
     edge_scalar_input_dim: Optional[int] = DEFAULT_EDGE_SCALAR_INPUT_DIM
     edge_vector_dim: int = 1
-    hidden_scalar_dim: int = 128
-    hidden_vector_dim: int = 16
-    latent_dim: int = 256
-    layers: int = 6
+    embedding: GCPEmbeddingConfig = field(default_factory=GCPEmbeddingConfig)
+    message_passing: GCPMessagePassingConfig = field(default_factory=GCPMessagePassingConfig)
+    feed_forward: GCPFeedForwardConfig = field(default_factory=GCPFeedForwardConfig)
+    latent_dim: int = 128
+    num_layers: int = 6
     dropout: float = 0.0
+    use_gcp_dropout: bool = False
+    predict_node_positions: bool = False
+    predict_node_rep: bool = False
+    norm_pos_diff: bool = False
+    pooling: str = "mean"
+    pooling_bottleneck_factor: float = 1.0
     displacement_head: bool = False
     init: str = "random"
     init_checkpoint: Optional[str] = None
     strict_init: bool = True
+
+    def __post_init__(self) -> None:
+        if self.message_passing.scalar_dim != self.embedding.scalar_dim:
+            raise ValueError(
+                "message_passing.scalar_dim must match embedding.scalar_dim for residual connections"
+            )
+        if self.message_passing.vector_dim != self.embedding.vector_dim:
+            raise ValueError(
+                "message_passing.vector_dim must match embedding.vector_dim for residual connections"
+            )
+
+        if self.message_passing.vector_hidden_channels is None:
+            derived = int(round(self.message_passing.vector_dim * self.message_passing.vector_bottleneck_factor))
+            self.message_passing.vector_hidden_channels = max(1, derived)
+
+        if self.feed_forward.hidden_dim is None:
+            derived = int(round(self.message_passing.scalar_dim * self.feed_forward.bottleneck_factor))
+            self.feed_forward.hidden_dim = max(1, derived)
+
+        if self.feed_forward.gate_hidden_dim is None:
+            self.feed_forward.gate_hidden_dim = self.feed_forward.hidden_dim
+
+        if self.predict_node_positions:
+            self.displacement_head = True
 
 
 class GCPNetEncoder(nn.Module):
@@ -233,15 +302,20 @@ class GCPNetEncoder(nn.Module):
         super().__init__()
 
         self.config = config or GCPNetConfig()
+        self.config.__post_init__()
+
+        embedding_cfg = self.config.embedding
+        mp_cfg = self.config.message_passing
+        ff_cfg = self.config.feed_forward
 
         if self.config.edge_scalar_input_dim is None:
             self.edge_scalar_in_dim = self.config.edge_scalar_dim
         else:
             self.edge_scalar_in_dim = self.config.edge_scalar_input_dim
 
-        self.scalar_proj = nn.Linear(self.config.node_scalar_dim, self.config.hidden_scalar_dim, bias=False)
+        self.scalar_proj = nn.Linear(self.config.node_scalar_dim, embedding_cfg.scalar_dim, bias=False)
         self.vector_proj = nn.Parameter(
-            torch.randn(self.config.hidden_vector_dim, self.config.node_vector_dim) * 0.02
+            torch.randn(embedding_cfg.vector_dim, self.config.node_vector_dim) * 0.02
         )
 
         if self.config.edge_scalar_dim > 0:
@@ -259,19 +333,20 @@ class GCPNetEncoder(nn.Module):
         self.layers = nn.ModuleList(
             [
                 GCPConv(
-                    self.config.hidden_scalar_dim,
-                    self.config.hidden_vector_dim,
+                    mp_cfg.scalar_dim,
+                    mp_cfg.vector_dim,
                     edge_scalar_dim=self.config.edge_scalar_dim,
                     edge_vector_channels=self.config.edge_vector_dim,
-                    hidden_scalar_dim=self.config.hidden_scalar_dim * 2,
-                    hidden_vector_channels=self.config.hidden_vector_dim,
-                    dropout=self.config.dropout,
+                    hidden_scalar_dim=ff_cfg.hidden_dim,
+                    hidden_vector_channels=mp_cfg.vector_hidden_channels,
+                    gate_hidden_dim=ff_cfg.gate_hidden_dim,
+                    dropout=self.config.dropout if self.config.use_gcp_dropout else 0.0,
                 )
-                for _ in range(self.config.layers)
+                for _ in range(self.config.num_layers)
             ]
         )
 
-        readout_dim = self.config.hidden_scalar_dim + self.config.hidden_vector_dim
+        readout_dim = mp_cfg.scalar_dim + mp_cfg.vector_dim
         self.readout = nn.Sequential(
             nn.LayerNorm(readout_dim),
             nn.Linear(readout_dim, self.config.latent_dim, bias=False),
@@ -279,10 +354,10 @@ class GCPNetEncoder(nn.Module):
 
         if self.config.displacement_head:
             self.displacement_head = nn.Sequential(
-                nn.LayerNorm(self.config.hidden_scalar_dim),
-                nn.Linear(self.config.hidden_scalar_dim, self.config.hidden_scalar_dim, bias=False),
+                nn.LayerNorm(mp_cfg.scalar_dim),
+                nn.Linear(mp_cfg.scalar_dim, mp_cfg.scalar_dim, bias=False),
                 nn.SiLU(),
-                nn.Linear(self.config.hidden_scalar_dim, 3, bias=False),
+                nn.Linear(mp_cfg.scalar_dim, 3, bias=False),
             )
         else:
             self.displacement_head = None
@@ -362,4 +437,7 @@ __all__ = [
     "GCPConv",
     "VectorLayerNorm",
     "DEFAULT_EDGE_SCALAR_INPUT_DIM",
+    "GCPEmbeddingConfig",
+    "GCPMessagePassingConfig",
+    "GCPFeedForwardConfig",
 ]

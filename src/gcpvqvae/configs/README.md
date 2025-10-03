@@ -30,16 +30,28 @@ omitted the defaults listed below are applied by the underlying dataclasses.
 
 | key | default | description |
 | --- | --- | --- |
-| `node_scalar_dim` | `6` | Input scalar feature channels per residue. |
-| `node_vector_dim` | `3` | Input vector feature channels per residue. |
-| `edge_scalar_dim` | `8` | Scalar features attached to each edge. |
-| `edge_scalar_input_dim` | `null` | Optional raw dimensionality of edge scalar features (defaults to `edge_scalar_dim`). |
+| `node_scalar_dim` | `49` | Input scalar feature channels per residue. |
+| `node_vector_dim` | `2` | Input vector feature channels per residue. |
+| `edge_scalar_dim` | `9` | Scalar features attached to each edge. |
+| `edge_scalar_input_dim` | `null` | Optional raw dimensionality of edge scalar features (defaults to the featuriser output, currently `9`). |
 | `edge_vector_dim` | `1` | Vector features per edge. |
-| `hidden_scalar_dim` | `128` | Scalar width of the hidden representations. |
-| `hidden_vector_dim` | `16` | Vector channel count inside the GCP blocks. |
-| `latent_dim` | `256` | Output embedding dimension fed to the Transformer. |
-| `layers` | `6` | Number of stacked GCP convolution layers. |
-| `dropout` | `0.0` | Dropout applied within the convolutions. |
+| `embedding.scalar_dim` | `128` | Scalar width produced by the input projection. |
+| `embedding.vector_dim` | `16` | Vector channel count produced by the input projection. |
+| `message_passing.scalar_dim` | `128` | Scalar width used inside each GCP block (must match `embedding.scalar_dim`). |
+| `message_passing.vector_dim` | `16` | Vector width used inside each GCP block (must match `embedding.vector_dim`). |
+| `message_passing.vector_bottleneck_factor` | `1.0` | Multiplier controlling the intermediate vector bottleneck channels. |
+| `feed_forward.hidden_dim` | derived | Hidden width of the scalar feed-forward MLPs (defaults to `message_passing.scalar_dim * feed_forward.bottleneck_factor`). |
+| `feed_forward.gate_hidden_dim` | derived | Hidden width of the gating MLPs (defaults to `feed_forward.hidden_dim`). |
+| `feed_forward.bottleneck_factor` | `2.0` | Multiplier used when `feed_forward.hidden_dim` is omitted. |
+| `latent_dim` | `128` | Output embedding dimension fed to the Transformer. |
+| `num_layers` | `6` | Number of stacked GCP convolution layers. |
+| `dropout` | `0.0` | Dropout probability applied within the convolutions (enabled when `use_gcp_dropout` is `True`). |
+| `use_gcp_dropout` | `False` | Toggles dropout inside the GCP layers. |
+| `predict_node_positions` | `False` | Enables an auxiliary position prediction head. |
+| `predict_node_rep` | `False` | Requests node-level representation outputs (always returned in this implementation). |
+| `norm_pos_diff` | `False` | Flag reserved for normalising positional differences (unused). |
+| `pooling` | `"mean"` | Pooling strategy for latent aggregation (informational flag). |
+| `pooling_bottleneck_factor` | `1.0` | Scaling factor reserved for pooled projections. |
 | `displacement_head` | `False` | Enables an auxiliary displacement prediction head. |
 | `init` | `"random"` | Select `"random"` for fresh weights or `"pretrained"` to load from a checkpoint. |
 | `init_checkpoint` | `null` | Filesystem path to the checkpoint containing pretrained GCPNet weights. |

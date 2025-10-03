@@ -8,7 +8,12 @@ import torch
 
 from gcpvqvae.data.dataset import BackboneDataset, collate_backbones
 from gcpvqvae.data.mmcif import BackboneRecord, write_mmcif
-from gcpvqvae.models.gcpnet import GCPNetConfig
+from gcpvqvae.models.gcpnet import (
+    GCPEmbeddingConfig,
+    GCPFeedForwardConfig,
+    GCPMessagePassingConfig,
+    GCPNetConfig,
+)
 from gcpvqvae.models.gcpvqvae import (
     DataPipelineConfig,
     GCPVQVAE,
@@ -77,10 +82,15 @@ def _build_test_structure(path: Path) -> None:
 
 def _make_config() -> GCPVQVAEConfig:
     gcp_cfg = GCPNetConfig(
-        hidden_scalar_dim=64,
-        hidden_vector_dim=8,
+        node_scalar_dim=6,
+        node_vector_dim=3,
+        edge_scalar_dim=8,
+        edge_scalar_input_dim=8,
+        embedding=GCPEmbeddingConfig(scalar_dim=64, vector_dim=8),
+        message_passing=GCPMessagePassingConfig(scalar_dim=64, vector_dim=8),
+        feed_forward=GCPFeedForwardConfig(bottleneck_factor=2.0),
         latent_dim=32,
-        layers=2,
+        num_layers=2,
     )
     vq_cfg = VectorQuantizerConfig(num_codes=32, dim=24, beta=0.25, decay=0.9, kmeans_iters=1)
     enc_cfg = TransformerConfig(
@@ -170,13 +180,16 @@ def test_latent_adapter_projects_embeddings(tmp_path) -> None:
     batch = collate_backbones([dataset[0]])
 
     gcp_cfg = GCPNetConfig(
-        hidden_scalar_dim=128,
-        hidden_vector_dim=16,
+        node_scalar_dim=6,
+        node_vector_dim=3,
         edge_scalar_dim=32,
         edge_scalar_input_dim=8,
         edge_vector_dim=1,
+        embedding=GCPEmbeddingConfig(scalar_dim=128, vector_dim=16),
+        message_passing=GCPMessagePassingConfig(scalar_dim=128, vector_dim=16),
+        feed_forward=GCPFeedForwardConfig(bottleneck_factor=2.0),
         latent_dim=256,
-        layers=3,
+        num_layers=3,
     )
     adapter_cfg = LatentAdapterConfig(enabled=True, output_dim=32, bias=True)
     vq_cfg = VectorQuantizerConfig(num_codes=16, dim=24, beta=0.25, decay=0.9, kmeans_iters=1)
