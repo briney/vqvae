@@ -10,6 +10,7 @@ import numpy as np
 import torch
 from torch import Tensor, nn
 
+from gcpvqvae.data.batch import EdgeStorage, ProteinBatch, protein_batch_from_graph_dict
 from gcpvqvae.data.featurize import featurize_backbone
 from gcpvqvae.data.mmcif import PAD_INDEX, BackboneRecord, load_mmcif
 from gcpvqvae.models.decoder import RotationDecoder
@@ -227,28 +228,17 @@ class GCPVQVAE(nn.Module):
             mask = mask & ~batch["nan_mask"].to(torch.bool).to(device)
 
         coords = batch["coords"].to(device=device, dtype=dtype)
-        node_scalars = batch["node_scalars"].to(device=device, dtype=dtype)
-        node_vectors = batch["node_vectors"].to(device=device, dtype=dtype)
-        edge_index = batch["edge_index"].to(device=device)
-        edge_scalars = batch["edge_scalars"].to(device=device, dtype=dtype)
-        edge_vectors = batch["edge_vectors"].to(device=device, dtype=dtype)
-        edge_frames = batch["edge_frames"].to(device=device, dtype=dtype)
+        proto = protein_batch_from_graph_dict(batch)
+        proto = proto.to(device=device, dtype=dtype)
 
-        batch_size, max_len, _ = node_scalars.shape
-        flat_scalars = self._flatten_batch(node_scalars)
-        flat_vectors = self._flatten_batch(node_vectors)
-        flat_mask = mask.reshape(-1)
+        batch_size, max_len, _ = batch["node_scalars"].shape
 
-        gcp_out = self.encoder_gcp(
-            flat_scalars,
-            flat_vectors,
-            edge_index,
-            edge_scalars,
-            edge_vectors,
-            edge_frames,
-            mask=flat_mask,
-        )
-        embeddings = gcp_out["embeddings"].reshape(batch_size, max_len, -1)
+        gcp_out = self.encoder_gcp(proto)
+        flat_embeddings = gcp_out["embeddings"]
+        latent_dim = flat_embeddings.shape[-1]
+        padded = flat_embeddings.new_zeros((batch_size * max_len, latent_dim))
+        padded.index_copy_(0, proto.valid_indices, flat_embeddings)
+        embeddings = padded.reshape(batch_size, max_len, latent_dim)
         projected = self._project_embeddings(embeddings)
 
         enc_hidden = self.encoder_transformer(projected, mask=mask)
@@ -303,6 +293,7 @@ class GCPVQVAE(nn.Module):
         self,
         node_scalars: Tensor,
         node_vectors: Tensor,
+        ca_positions: Tensor,
         edge_index: Tensor,
         edge_scalars: Tensor,
         edge_vectors: Tensor,
@@ -319,16 +310,32 @@ class GCPVQVAE(nn.Module):
         edge_vectors = edge_vectors.to(device=device, dtype=dtype)
         edge_frames = edge_frames.to(device=device, dtype=dtype)
         mask = mask.to(device=device, dtype=torch.bool)
+        ca_positions = ca_positions.to(device=device, dtype=dtype)
 
-        gcp_out = self.encoder_gcp(
-            node_scalars,
-            node_vectors,
-            edge_index,
-            edge_scalars,
-            edge_vectors,
-            edge_frames,
+        proto = ProteinBatch(
+            h=node_scalars,
+            chi=node_vectors,
+            e={
+                "knn_k": EdgeStorage(
+                    edge_index=edge_index,
+                    scalars=edge_scalars,
+                    vectors=edge_vectors,
+                    frames=edge_frames,
+                    batch=None,
+                    name="knn_k",
+                )
+            },
+            xi=ca_positions,
+            batch=torch.zeros(node_scalars.shape[0], dtype=torch.long, device=node_scalars.device),
+            ptr=torch.tensor([0, node_scalars.shape[0]], device=node_scalars.device),
             mask=mask,
         )
+        proto.valid_indices = torch.arange(node_scalars.shape[0], device=node_scalars.device)
+        proto.full_mask = mask.unsqueeze(0)
+        proto.batch_size = 1
+        proto.max_length = node_scalars.shape[0]
+        proto = proto.to(device=device, dtype=dtype)
+        gcp_out = self.encoder_gcp(proto)
         embeddings = gcp_out["embeddings"].unsqueeze(0)
         projected = self._project_embeddings(embeddings)
         enc_hidden = self.encoder_transformer(projected, mask=mask.unsqueeze(0))
@@ -365,6 +372,7 @@ class GCPVQVAE(nn.Module):
             embeddings, enc_hidden, quantized, extras = self._run_encoder(
                 features["node_scalars"],
                 features["node_vectors"],
+                record.coords[:, 1, :],
                 features["edge_index"],
                 features["edge_scalars"],
                 features["edge_vectors"],

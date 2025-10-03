@@ -1,5 +1,6 @@
 import torch
 
+from gcpvqvae.data.batch import EdgeStorage, ProteinBatch
 from gcpvqvae.models.gcpnet import (
     DEFAULT_EDGE_SCALAR_INPUT_DIM,
     GCPNetConfig,
@@ -22,16 +23,28 @@ def test_gcpnet_encoder_projects_edge_scalars_with_default_input_dim() -> None:
     edge_index = torch.tensor([[0, 1, 2], [1, 2, 3]], dtype=torch.long)
     edge_scalars = torch.randn(edge_index.shape[1], DEFAULT_EDGE_SCALAR_INPUT_DIM)
     edge_vectors = torch.randn(edge_index.shape[1], config.edge_vector_dim, 3)
-    edge_frames = torch.randn(edge_index.shape[1], 3, 3)
+    edge_frames = torch.eye(3).expand(edge_index.shape[1], 3, 3).clone()
+    positions = torch.randn(num_nodes, 3)
 
-    output = encoder(
-        node_scalars,
-        node_vectors,
-        edge_index,
-        edge_scalars,
-        edge_vectors,
-        edge_frames,
+    proto = ProteinBatch(
+        h=node_scalars,
+        chi=node_vectors,
+        e={
+            "knn_k": EdgeStorage(
+                edge_index=edge_index,
+                scalars=edge_scalars,
+                vectors=edge_vectors,
+                frames=edge_frames,
+                batch=torch.zeros(edge_index.shape[1], dtype=torch.long),
+            )
+        },
+        xi=positions,
+        batch=torch.zeros(num_nodes, dtype=torch.long),
+        ptr=torch.tensor([0, num_nodes], dtype=torch.long),
+        mask=torch.ones(num_nodes, dtype=torch.bool),
     )
+
+    output = encoder(proto)
 
     assert output["embeddings"].shape == (num_nodes, config.latent_dim)
 
@@ -50,7 +63,7 @@ def test_gcpconv_supports_bfloat16_inputs() -> None:
     edge_index = torch.tensor([[0, 1, 2, 3], [1, 2, 3, 4]], dtype=torch.long)
     edge_scalars = torch.randn(edge_index.shape[1], conv.edge_scalar_dim, dtype=torch.bfloat16)
     edge_vectors = torch.randn(edge_index.shape[1], conv.edge_vector_channels, 3, dtype=torch.bfloat16)
-    edge_frames = torch.randn(edge_index.shape[1], 3, 3, dtype=torch.bfloat16)
+    edge_frames = torch.eye(3, dtype=torch.bfloat16).expand(edge_index.shape[1], 3, 3).clone()
 
     scalars_out, vectors_out = conv(
         node_scalars,
@@ -77,16 +90,28 @@ def test_gcpnet_encoder_supports_bfloat16_inputs() -> None:
     edge_index = torch.tensor([[0, 1, 2, 3], [1, 2, 3, 4]], dtype=torch.long)
     edge_scalars = torch.randn(num_edges, config.edge_scalar_dim, dtype=torch.bfloat16)
     edge_vectors = torch.randn(num_edges, config.edge_vector_dim, 3, dtype=torch.bfloat16)
-    edge_frames = torch.randn(num_edges, 3, 3, dtype=torch.bfloat16)
+    edge_frames = torch.eye(3, dtype=torch.bfloat16).expand(num_edges, 3, 3).clone()
+    positions = torch.randn(num_nodes, 3, dtype=torch.bfloat16)
 
-    outputs = encoder(
-        node_scalars,
-        node_vectors,
-        edge_index,
-        edge_scalars,
-        edge_vectors,
-        edge_frames,
+    proto = ProteinBatch(
+        h=node_scalars,
+        chi=node_vectors,
+        e={
+            "knn_k": EdgeStorage(
+                edge_index=edge_index,
+                scalars=edge_scalars,
+                vectors=edge_vectors,
+                frames=edge_frames,
+                batch=torch.zeros(num_edges, dtype=torch.long),
+            )
+        },
+        xi=positions,
+        batch=torch.zeros(num_nodes, dtype=torch.long),
+        ptr=torch.tensor([0, num_nodes], dtype=torch.long),
+        mask=torch.ones(num_nodes, dtype=torch.bool),
     )
+
+    outputs = encoder(proto)
 
     assert outputs["embeddings"].dtype is torch.bfloat16
     assert outputs["node_scalars"].dtype is torch.bfloat16
