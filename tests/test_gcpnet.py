@@ -50,7 +50,9 @@ def test_gcpnet_encoder_projects_edge_scalars_with_default_input_dim() -> None:
 
     output = encoder(proto)
 
-    assert output["embeddings"].shape == (num_nodes, config.latent_dim)
+    node_dim = output["node_embedding"].shape[-1]
+    assert output["node_embedding"].shape == (num_nodes, node_dim)
+    assert output["graph_embedding"].shape == (proto.num_graphs(), node_dim)
 
 
 def test_prepare_model_config_defaults_edge_scalar_input_dim() -> None:
@@ -127,6 +129,6 @@ def test_gcpnet_encoder_supports_bfloat16_inputs() -> None:
 
     outputs = encoder(proto)
 
-    assert outputs["embeddings"].dtype is torch.bfloat16
+    assert outputs["node_embedding"].dtype is torch.bfloat16
     assert outputs["node_scalars"].dtype is torch.bfloat16
     assert outputs["node_vectors"].dtype is torch.bfloat16
