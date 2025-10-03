@@ -6,6 +6,7 @@ import ast
 import logging as log
 from collections import OrderedDict
 from pathlib import Path
+from typing import Any, Dict, Optional, Sequence
 from box import Box
 from torch.utils.tensorboard import SummaryWriter
 import torch
@@ -19,10 +20,15 @@ import yaml
 import h5py
 from io import StringIO
 try:  # Optional dependency retained for legacy workflows
-    from hydra import compose, initialize  # type: ignore
+    from hydra import compose, initialize, initialize_config_dir  # type: ignore
+    from hydra.core.global_hydra import GlobalHydra  # type: ignore
+    from omegaconf import OmegaConf  # type: ignore
 except ModuleNotFoundError:  # pragma: no cover - fallback when Hydra is unavailable
     compose = None  # type: ignore
     initialize = None  # type: ignore
+    initialize_config_dir = None  # type: ignore
+    GlobalHydra = None  # type: ignore
+    OmegaConf = None  # type: ignore
 from Bio.PDB import PDBIO
 
 
@@ -69,6 +75,48 @@ def get_nb_trainable_parameters(model):
             trainable_params += num_params
 
     return trainable_params, all_param
+
+
+def load_config_with_overrides(config_path: str, overrides: Optional[Sequence[str]] = None) -> Dict[str, Any]:
+    """Load a configuration file and apply Hydra style overrides.
+
+    Args:
+        config_path: Absolute or relative path to the YAML configuration file.
+        overrides: Optional sequence of Hydra-formatted override strings (e.g.
+            ``["optimizer.lr=1e-4", "train_settings.num_epochs=5"]``).
+
+    Returns:
+        The resolved configuration as a plain ``dict`` suitable for wrapping in a
+        :class:`python_box.Box` or similar container.
+
+    Raises:
+        RuntimeError: If Hydra is not available in the current environment.
+        ValueError: If the configuration cannot be resolved into a mapping.
+    """
+
+    if compose is None or initialize_config_dir is None or GlobalHydra is None or OmegaConf is None:
+        raise RuntimeError(
+            "Hydra is required to load configs with overrides; install hydra-core to enable this feature."
+        )
+
+    overrides = list(overrides) if overrides else []
+    config_abspath = os.path.abspath(config_path)
+    config_dir = os.path.dirname(config_abspath)
+    config_name = os.path.splitext(os.path.basename(config_abspath))[0]
+
+    # Hydra keeps global state about the current configuration; ensure we start from
+    # a clean slate when composing configs programmatically.
+    GlobalHydra.instance().clear()
+
+    with initialize_config_dir(version_base=None, config_dir=config_dir):
+        cfg = compose(config_name=config_name, overrides=overrides)
+
+    cfg_dict = OmegaConf.to_container(cfg, resolve=True)
+    if not isinstance(cfg_dict, dict):
+        raise ValueError("Resolved configuration must be a mapping at the top level.")
+
+    cfg_dict.setdefault("config_path", config_abspath)
+    return cfg_dict
 
 
 def print_trainable_parameters(model, logging, description=""):

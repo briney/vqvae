@@ -36,6 +36,7 @@ pip install tmtools
 pip install jaxtyping
 pip install beartype
 pip install omegaconf
+pip install hydra-core
 pip install ndlinear
 pip install torch_tb_profiler
 pip install tqdm
