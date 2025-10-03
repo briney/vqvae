@@ -1,3 +1,4 @@
+import argparse
 import os
 import yaml
 import shutil
@@ -11,7 +12,13 @@ from accelerate import Accelerator, DataLoaderConfiguration
 from accelerate.utils import broadcast_object_list
 import csv
 
-from utils.utils import load_configs, save_backbone_pdb_inference, load_checkpoints_simple, get_logging
+from utils.utils import (
+    load_configs,
+    load_config_with_overrides,
+    save_backbone_pdb_inference,
+    load_checkpoints_simple,
+    get_logging,
+)
 from utils.custom_losses import calculate_aligned_mse_loss
 from data.dataset import GCPNetDataset, custom_collate_pretrained_gcp
 from models.super_model import prepare_model
@@ -143,12 +150,7 @@ def evaluate_structures(pdb_dir, original_pdb_dir, result_dir, logger):
         logger.error("No structures were successfully evaluated")
 
 
-def main():
-    # Load inference configuration
-    with open("configs/evaluation_config.yaml") as f:
-        infer_cfg = yaml.full_load(f)
-    infer_cfg = Box(infer_cfg)
-
+def main(infer_cfg: Box):
     dataloader_config = DataLoaderConfiguration(
         # dispatch_batches=True,
         # non_blocking=False,
@@ -331,4 +333,14 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    parser = argparse.ArgumentParser(description="Evaluate a trained VQ-VAE model.")
+    parser.add_argument(
+        "--config_path", "-c", help="Path to evaluation_config.yaml",
+        default='./configs/evaluation_config.yaml'
+    )
+    args, unknown_overrides = parser.parse_known_args()
+
+    raw_cfg = load_config_with_overrides(args.config_path, unknown_overrides)
+    infer_cfg = Box(raw_cfg)
+
+    main(infer_cfg)

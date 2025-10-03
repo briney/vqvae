@@ -1,6 +1,5 @@
 import argparse
 import numpy as np
-import yaml
 import os
 import torch
 from collections.abc import Mapping
@@ -10,6 +9,7 @@ from utils.custom_losses import calculate_decoder_loss, log_per_loss_grad_norms
 from utils.utils import (
     save_backbone_pdb,
     load_configs,
+    load_config_with_overrides,
     load_checkpoints,
     prepare_saving_dir,
     get_logging,
@@ -597,8 +597,7 @@ def valid_loop(net, valid_loader, epoch, **kwargs):
     return return_dict
 
 
-def main(dict_config, config_file_path):
-    configs = load_configs(dict_config)
+def main(configs, raw_config, config_file_path):
     if isinstance(configs.fix_seed, int):
         torch.manual_seed(configs.fix_seed)
         torch.random.manual_seed(configs.fix_seed)
@@ -652,7 +651,7 @@ def main(dict_config, config_file_path):
     wandb_run = None
     wandb_settings = getattr(log_config, 'wandb', None) if log_config is not None else None
     if accelerator.is_main_process:
-        wandb_run, wandb_settings = _init_wandb_run(configs, dict_config, result_path, logging=logging)
+        wandb_run, wandb_settings = _init_wandb_run(configs, raw_config, result_path, logging=logging)
     accelerator.wait_for_everyone()
 
     train_dataloader, valid_dataloader = prepare_gcpnet_vqvae_dataloaders(
@@ -925,12 +924,14 @@ def main(dict_config, config_file_path):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Train a VQ-VAE models.")
-    parser.add_argument("--config_path", "-c", help="The location of config file",
-                        default='./configs/config_vqvae.yaml')
-    args = parser.parse_args()
+    parser.add_argument(
+        "--config_path", "-c", help="The location of config file",
+        default='./configs/config_vqvae.yaml'
+    )
+    args, unknown_overrides = parser.parse_known_args()
     config_path = args.config_path
 
-    with open(config_path) as file:
-        config_file = yaml.full_load(file)
+    raw_config = load_config_with_overrides(config_path, unknown_overrides)
+    configs = load_configs(raw_config)
 
-    main(config_file, config_path)
+    main(configs, raw_config, config_path)
