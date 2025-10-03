@@ -3,6 +3,7 @@ import torch
 from gcpvqvae.data.batch import EdgeStorage, ProteinBatch
 from gcpvqvae.models.gcpnet import (
     DEFAULT_EDGE_SCALAR_INPUT_DIM,
+    GCPConv,
     GCPNetConfig,
     GCPNetEncoder,
 )
@@ -10,19 +11,18 @@ from gcpvqvae.system.train_gcpnet import _prepare_model_config
 
 
 def test_gcpnet_encoder_projects_edge_scalars_with_default_input_dim() -> None:
-    config = GCPNetConfig(edge_scalar_dim=32)
+    config = GCPNetConfig()
     encoder = GCPNetEncoder(config)
 
-    assert encoder.edge_scalar_proj is not None
-    weight = encoder.edge_scalar_proj.weight
-    assert weight.shape[1] == DEFAULT_EDGE_SCALAR_INPUT_DIM
+    weight = encoder.embedding.edge_scalar_proj.weight
+    assert weight.shape[1] == DEFAULT_EDGE_SCALAR_INPUT_DIM + encoder.embedding.num_rbf
 
     num_nodes = 4
     node_scalars = torch.randn(num_nodes, config.node_scalar_dim)
     node_vectors = torch.randn(num_nodes, config.node_vector_dim, 3)
     edge_index = torch.tensor([[0, 1, 2], [1, 2, 3]], dtype=torch.long)
     edge_scalars = torch.randn(edge_index.shape[1], DEFAULT_EDGE_SCALAR_INPUT_DIM)
-    edge_vectors = torch.randn(edge_index.shape[1], config.edge_vector_dim, 3)
+    edge_vectors = torch.randn(edge_index.shape[1], config.edge_vector_input_dim, 3)
     edge_frames = torch.eye(3).expand(edge_index.shape[1], 3, 3).clone()
     positions = torch.randn(num_nodes, 3)
 
@@ -56,7 +56,16 @@ def test_prepare_model_config_defaults_edge_scalar_input_dim() -> None:
 
 
 def test_gcpconv_supports_bfloat16_inputs() -> None:
-    conv = GCPNetEncoder().layers[0]
+    config = GCPNetConfig()
+    conv = GCPConv(
+        config.hidden_scalar_dim,
+        config.hidden_vector_dim,
+        edge_scalar_dim=config.edge_scalar_dim,
+        edge_vector_channels=config.edge_vector_dim,
+        hidden_scalar_dim=config.hidden_scalar_dim * 2,
+        hidden_vector_channels=config.hidden_vector_dim,
+        dropout=config.dropout,
+    )
 
     node_scalars = torch.randn(6, conv.scalar_dim, dtype=torch.bfloat16)
     node_vectors = torch.randn(6, conv.vector_dim, 3, dtype=torch.bfloat16)
@@ -88,8 +97,8 @@ def test_gcpnet_encoder_supports_bfloat16_inputs() -> None:
     node_scalars = torch.randn(num_nodes, config.node_scalar_dim, dtype=torch.bfloat16)
     node_vectors = torch.randn(num_nodes, config.node_vector_dim, 3, dtype=torch.bfloat16)
     edge_index = torch.tensor([[0, 1, 2, 3], [1, 2, 3, 4]], dtype=torch.long)
-    edge_scalars = torch.randn(num_edges, config.edge_scalar_dim, dtype=torch.bfloat16)
-    edge_vectors = torch.randn(num_edges, config.edge_vector_dim, 3, dtype=torch.bfloat16)
+    edge_scalars = torch.randn(num_edges, DEFAULT_EDGE_SCALAR_INPUT_DIM, dtype=torch.bfloat16)
+    edge_vectors = torch.randn(num_edges, config.edge_vector_input_dim, 3, dtype=torch.bfloat16)
     edge_frames = torch.eye(3, dtype=torch.bfloat16).expand(num_edges, 3, 3).clone()
     positions = torch.randn(num_nodes, 3, dtype=torch.bfloat16)
 
