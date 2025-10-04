@@ -96,14 +96,19 @@ Additional top-level options control auxiliary behaviour:
 | key | default | description |
 | --- | --- | --- |
 | `num_codes` | `4096` | Size of the codebook. |
-| `dim` | `256` | Codebook embedding dimension. |
+| `dim` | `128` | Codebook embedding dimension. |
 | `beta` | `0.25` | Commitment loss weight. |
 | `decay` | `0.99` | EMA decay for codebook updates. |
 | `epsilon` | `1e-5` | Numerical stability constant. |
-| `kmeans_iters` | `10` | Initial K-means refinement iterations. |
+| `kmeans_init` | `True` | Enables k-means initialisation of the codebook. |
+| `kmeans_iters` | `10` | Initial k-means refinement iterations. |
+| `stochastic_sample_codes` | `True` | Samples neighbouring codes during training for exploration. |
+| `sample_codebook_temp` | `1.0` | Temperature applied when sampling alternative codes. |
 | `rotation_trick` | `True` | Enables the rotation trick from VQ-VAE v2. |
 | `orthogonal_reg_weight` | `0.0` | Strength of the optional orthogonality penalty. |
 | `orthogonal_reg_max_codes` | `512` | Maximum codes used when computing the penalty. |
+| `orthogonal_reg_active_codes_only` | `True` | Restricts the penalty to codes activated in the batch. |
+| `return_zeros_for_masked_padding` | `True` | Pads masked tokens with zeros instead of inputs. |
 
 ### `model.rotation` – Rigid-frame decoder (`RotationHeadConfig`)
 

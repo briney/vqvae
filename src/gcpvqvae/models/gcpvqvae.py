@@ -17,7 +17,7 @@ from gcpvqvae.models.decoder import RotationDecoder
 from gcpvqvae.models.gcpnet import GCPNetConfig, GCPNetEncoder
 from gcpvqvae.models.losses import reconstruction_loss
 from gcpvqvae.models.transformer import GCPTokensTransformer, TransformerConfig
-from gcpvqvae.models.vq import VectorQuantizer
+from gcpvqvae.models.vq import VectorQuantizer, VectorQuantizerOptions
 from gcpvqvae.utils.checkpoint import load_checkpoint
 
 
@@ -34,14 +34,19 @@ class VectorQuantizerConfig:
     """Configuration for the latent codebook."""
 
     num_codes: int = 4096
-    dim: int = 256
+    dim: int = 128
     beta: float = 0.25
     decay: float = 0.99
     epsilon: float = 1e-5
+    kmeans_init: bool = True
     kmeans_iters: int = 10
+    stochastic_sample_codes: bool = True
+    sample_codebook_temp: float = 1.0
     rotation_trick: bool = True
     orthogonal_reg_weight: float = 0.0
     orthogonal_reg_max_codes: int = 512
+    orthogonal_reg_active_codes_only: bool = True
+    return_zeros_for_masked_padding: bool = True
 
 
 @dataclass
@@ -123,16 +128,24 @@ class GCPVQVAE(nn.Module):
         else:
             self.latent_adapter = None
         self.encoder_transformer = GCPTokensTransformer(self.config.encoder)
+        vq_options = VectorQuantizerOptions(
+            kmeans_init=self.config.vq.kmeans_init,
+            kmeans_iters=self.config.vq.kmeans_iters,
+            stochastic_sample_codes=self.config.vq.stochastic_sample_codes,
+            sample_codebook_temp=self.config.vq.sample_codebook_temp,
+            orthogonal_reg_active_codes_only=self.config.vq.orthogonal_reg_active_codes_only,
+            return_zeros_for_masked_padding=self.config.vq.return_zeros_for_masked_padding,
+        )
         self.vq = VectorQuantizer(
             self.config.vq.num_codes,
             self.config.vq.dim,
             beta=self.config.vq.beta,
             decay=self.config.vq.decay,
             epsilon=self.config.vq.epsilon,
-            kmeans_iters=self.config.vq.kmeans_iters,
             rotation_trick=self.config.vq.rotation_trick,
             orthogonal_reg_weight=self.config.vq.orthogonal_reg_weight,
             orthogonal_reg_max_codes=self.config.vq.orthogonal_reg_max_codes,
+            options=vq_options,
         )
         self.decoder_transformer = GCPTokensTransformer(self.config.decoder)
         self.rotation_decoder = RotationDecoder(
@@ -473,7 +486,8 @@ class GCPVQVAE(nn.Module):
             valid = mask_tensor & (tokens_tensor >= 0)
             if valid.any():
                 flat_indices = tokens_tensor[valid]
-                dequant[valid] = self.vq.embedding.index_select(0, flat_indices).to(dtype)
+                decoded = self.vq.get_output_from_indices(flat_indices)
+                dequant[valid] = decoded.to(dtype)
 
             dec_hidden = self.decoder_transformer(dequant, mask=mask_tensor)
             coords_central, final_pose = self.rotation_decoder(

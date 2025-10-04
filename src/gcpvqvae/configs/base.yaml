@@ -45,12 +45,17 @@ model:
     strict_init: false
   vq:
     num_codes: 4096
-    dim: 256
-    beta: 0.5
+    dim: 128
+    beta: 0.25
     decay: 0.99
+    kmeans_init: true
     kmeans_iters: 10
+    stochastic_sample_codes: true
+    sample_codebook_temp: 1.0
     orthogonal_reg_weight: 10.0
     orthogonal_reg_max_codes: 512
+    orthogonal_reg_active_codes_only: true
+    return_zeros_for_masked_padding: true
   encoder:
     model_dim: 1024
     num_layers: 12
