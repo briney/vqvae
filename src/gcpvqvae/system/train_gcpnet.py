@@ -18,7 +18,7 @@ from torch.utils.data import DataLoader
 
 from gcpvqvae.data.dataset import BackboneDataset, collate_backbones
 from gcpvqvae.geometry.metrics import rmsd
-from gcpvqvae.models.decoder import RotationDecoder
+from gcpvqvae.models.decoder import Dim6RotStructureHead
 from gcpvqvae.data.batch import protein_batch_from_graph_dict
 from gcpvqvae.models.gcpnet import GCPNetConfig, GCPNetEncoder
 from gcpvqvae.models.gcpvqvae import RotationHeadConfig
@@ -228,10 +228,10 @@ class GCPNetPretrainModule(nn.Module):
     def __init__(self, config: PretrainModelConfig) -> None:
         super().__init__()
         self.encoder = GCPNetEncoder(config.gcp)
-        self.rotation = RotationDecoder(
+        self.rotation = Dim6RotStructureHead(
             config.rotation.input_dim,
-            translation_scale=config.rotation.translation_scale,
             template=config.rotation.template,
+            decoder_output_scaling_factor=config.rotation.decoder_output_scaling_factor,
         )
 
     def forward(self, batch: Dict[str, Tensor]) -> Dict[str, Tensor]:
@@ -252,7 +252,8 @@ class GCPNetPretrainModule(nn.Module):
         padded.index_copy_(0, proto.valid_indices, flat_embeddings)
         embeddings = padded.reshape(batch_size, max_len, latent)
 
-        recon_coords, pose = self.rotation(embeddings, mask=mask)
+        decoded_flat, rigid = self.rotation(embeddings, mask=mask)
+        recon_coords = rigid["coordinates"]
         rec_loss, rec_components = reconstruction_loss(
             recon_coords, coords, mask=mask, return_components=True
         )
@@ -262,7 +263,9 @@ class GCPNetPretrainModule(nn.Module):
             "reconstruction": rec_loss,
             "reconstruction_components": rec_components,
             "coords": recon_coords,
+            "coords_flat": decoded_flat,
             "mask": mask,
+            "pose": rigid,
         }
 
 

@@ -273,6 +273,38 @@ def test_preprocessed_dataset_batch_matches_gcpnet_expectations(tmp_path):
     assert torch.all(torch.isfinite(graph_embedding))
 
 
+def test_protein_batch_filters_edges_from_masked_nodes():
+    data_root = Path("tests/test_data/cif_50")
+    dataset = BackboneDataset(
+        data_root,
+        k=4,
+        length_cap=128,
+        cache=True,
+        progress=False,
+    )
+
+    # Pick a sample with at least one masked-out residue inside the sequence.
+    sample = next(item for item in dataset if item["mask"].sum() < item["mask"].shape[0])
+    batch = collate_backbones([sample])
+
+    protein_batch = protein_batch_from_graph_dict(batch)
+    storage = next(iter(protein_batch.e.values()))
+
+    assert storage.edge_index.numel() > 0
+    assert storage.edge_index.max().item() < protein_batch.h.shape[0]
+    assert storage.edge_index.min().item() >= 0
+
+    src, dst = storage.edge_index
+    num_nodes = protein_batch.h.shape[0]
+    assert torch.all(src < num_nodes)
+    assert torch.all(dst < num_nodes)
+
+    if storage.scalars.numel():
+        assert storage.scalars.shape[0] == src.shape[0]
+    if storage.vectors.numel():
+        assert storage.vectors.shape[0] == src.shape[0]
+
+
 def test_dataset_and_collate(tmp_path):
     cif_path = tmp_path / "test.cif"
     pdb_path = tmp_path / "test.pdb"

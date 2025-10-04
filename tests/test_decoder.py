@@ -4,85 +4,66 @@ from __future__ import annotations
 
 import torch
 
-from gcpvqvae.models.decoder import RotationDecoder
+from gcpvqvae.models.decoder import Dim6RotStructureHead
 
 
-def _identity_decoder(in_dim: int) -> RotationDecoder:
-    decoder = RotationDecoder(in_dim, translation_scale=1.0)
-    with torch.no_grad():
-        decoder.proj.weight.zero_()
-        decoder.proj.bias.zero_()
-        decoder.proj.weight.copy_(torch.eye(9, in_dim))
-    return decoder
+def test_structure_head_identity_template() -> None:
+    head = Dim6RotStructureHead(9, decoder_output_scaling_factor=1.0)
+    params = torch.tensor([[[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]]], dtype=torch.float32)
 
+    flat, aux = head._decode_params(params)
 
-def test_rotation_decoder_identity_frame() -> None:
-    decoder = _identity_decoder(9)
-    latents = torch.tensor([[[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]]])
-    coords, (R, t) = decoder(latents)
-
-    template = decoder.template
+    coords = aux["coordinates"]
+    template = head.template.index_select(0, torch.tensor([1, 0, 2]))
+    assert flat.shape == (1, 1, 9)
     assert torch.allclose(coords[0, 0], template, atol=1e-6)
-    assert torch.allclose(R, torch.eye(3))
-    assert torch.allclose(t, torch.zeros(3))
 
 
-def test_rotation_decoder_accumulates_translations() -> None:
-    decoder = _identity_decoder(9)
-    latents = torch.tensor(
+def test_structure_head_respects_mask() -> None:
+    head = Dim6RotStructureHead(9, decoder_output_scaling_factor=1.0)
+    params = torch.tensor(
         [
             [
-                [1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
-                [0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
-            ]
-        ],
-        dtype=torch.float32,
-    )
-
-    coords, (R, t) = decoder(latents)
-
-    ca_positions = coords[0, :, 1, :]
-    assert torch.allclose(ca_positions[0], torch.tensor([1.0, 0.0, 0.0]))
-    assert torch.allclose(ca_positions[1], torch.tensor([1.0, 1.0, 0.0]))
-    assert torch.allclose(t, torch.tensor([1.0, 1.0, 0.0]))
-    assert torch.allclose(R, torch.eye(3))
-
-
-def test_rotation_decoder_respects_mask() -> None:
-    decoder = _identity_decoder(9)
-    latents = torch.tensor(
-        [
-            [
-                [1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
-                [0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+                [1.0, 0.0, 0.0, 0.5, 0.1, -0.2, -0.3, 0.4, 0.2],
+                [2.0, -1.0, 0.5, 0.3, -0.2, 0.1, 0.4, -0.3, 0.2],
             ]
         ],
         dtype=torch.float32,
     )
     mask = torch.tensor([[True, False]])
 
-    coords, (R, t) = decoder(latents, mask=mask)
+    flat, aux = head._decode_params(params, mask=mask)
 
-    ca_positions = coords[0, :, 1, :]
-    assert torch.allclose(ca_positions[0], torch.tensor([1.0, 0.0, 0.0]))
-    assert torch.allclose(ca_positions[1], torch.zeros(3))
-    assert torch.allclose(t, torch.tensor([1.0, 0.0, 0.0]))
+    coords = aux["coordinates"]
+    rotations = aux["rotations"]
+    translations = aux["translations"]
+
+    assert torch.all(flat[0, 1] == 0.0)
+    assert torch.all(coords[0, 1] == 0.0)
+    assert torch.allclose(rotations[0, 1], torch.eye(3), atol=1e-6)
+    assert torch.all(translations[0, 1] == 0.0)
 
 
-def test_rotation_decoder_produces_valid_rotations() -> None:
+def test_structure_head_scaling_factor() -> None:
+    head = Dim6RotStructureHead(9, decoder_output_scaling_factor=2.5)
+    params = torch.zeros(1, 1, 9)
+
+    flat, aux = head._decode_params(params)
+    coords = aux["coordinates"].reshape(1, 1, 9)
+
+    assert torch.allclose(flat, coords * 2.5, atol=1e-6)
+
+
+def test_structure_head_produces_orthonormal_rotations() -> None:
     torch.manual_seed(0)
-    decoder = RotationDecoder(9)
+    head = Dim6RotStructureHead(16)
+    params = torch.randn(3, 7, 9)
 
-    latents = torch.randn(2, 5, 9)
-    _, (R, _t) = decoder(latents)
+    _, aux = head._decode_params(params)
+    rotations = aux["rotations"].reshape(-1, 3, 3)
 
-    identity = torch.eye(3).expand(R.shape[0], 3, 3)
-    rt_r = torch.matmul(R.transpose(-1, -2), R)
-    assert torch.allclose(rt_r, identity, atol=1e-5)
-    det = torch.linalg.det(R)
+    identity = torch.eye(3)
+    rt_r = torch.matmul(rotations.transpose(-1, -2), rotations)
+    assert torch.allclose(rt_r, identity.expand_as(rt_r), atol=1e-5)
+    det = torch.linalg.det(rotations)
     assert torch.allclose(det, torch.ones_like(det), atol=1e-5)
-
-    basis = torch.eye(3)
-    rotated = torch.matmul(R, basis)
-    norms = torch.linalg.norm(rotated, dim=-2)
-    assert torch.allclose(norms, torch.ones_like(norms), atol=1e-5)

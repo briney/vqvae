@@ -13,7 +13,7 @@ from torch import Tensor, nn
 from gcpvqvae.data.batch import EdgeStorage, ProteinBatch, protein_batch_from_graph_dict
 from gcpvqvae.data.featurize import featurize_backbone
 from gcpvqvae.data.mmcif import PAD_INDEX, BackboneRecord, load_mmcif
-from gcpvqvae.models.decoder import RotationDecoder
+from gcpvqvae.models.decoder import Dim6RotStructureHead
 from gcpvqvae.models.decoders import GeometricTransformerDecoder
 from gcpvqvae.models.gcpnet import GCPNetConfig, GCPNetEncoder
 from gcpvqvae.models.losses import reconstruction_loss
@@ -64,7 +64,7 @@ class RotationHeadConfig:
     """Parameters for the rigid 6D rotation decoder head."""
 
     input_dim: Optional[int] = None
-    translation_scale: float = 1.0
+    decoder_output_scaling_factor: float = 1.0
     template: Optional[Tensor] = None
 
 
@@ -151,10 +151,10 @@ class GCPVQVAE(nn.Module):
             options=vq_options,
         )
         self.decoder_transformer = GeometricTransformerDecoder(self.config.decoder)
-        self.rotation_decoder = RotationDecoder(
+        self.rotation_decoder = Dim6RotStructureHead(
             self.config.rotation.input_dim,
-            translation_scale=self.config.rotation.translation_scale,
             template=self.config.rotation.template,
+            decoder_output_scaling_factor=self.config.rotation.decoder_output_scaling_factor,
         )
 
     # ------------------------------------------------------------------ utils
@@ -312,15 +312,17 @@ class GCPVQVAE(nn.Module):
                 quantized[valid] = decoded.to(dtype)
 
             dec_hidden = self.decoder_transformer(quantized, mask=valid)
-            recon_coords, final_pose = self.rotation_decoder(dec_hidden, mask=valid)
+            decoded_flat, rigid = self.rotation_decoder(dec_hidden, mask=valid)
+            recon_coords = rigid["coordinates"]
 
             return {
                 "quantized": quantized,
                 "indices": indices,
                 "decoded": recon_coords,
+                "decoded_flat": decoded_flat,
                 "mask": mask_tensor,
                 "valid_mask": valid,
-                "pose": final_pose,
+                "pose": rigid,
                 "vq_loss": torch.zeros((), device=device, dtype=dtype),
                 "vq_metrics": {},
             }
@@ -355,7 +357,8 @@ class GCPVQVAE(nn.Module):
             }
 
         dec_hidden = self.decoder_transformer(quantized, mask=valid)
-        recon_coords, final_pose = self.rotation_decoder(dec_hidden, mask=valid)
+        decoded_flat, rigid = self.rotation_decoder(dec_hidden, mask=valid)
+        recon_coords = rigid["coordinates"]
 
         rec_loss, rec_components = reconstruction_loss(
             recon_coords,
@@ -372,9 +375,10 @@ class GCPVQVAE(nn.Module):
             "quantized": quantized,
             "indices": indices,
             "decoded": recon_coords,
+            "decoded_flat": decoded_flat,
             "mask": mask_tensor,
             "valid_mask": valid,
-            "pose": final_pose,
+            "pose": rigid,
             "vq_loss": vq_loss,
             "vq_metrics": vq_metrics,
             "reconstruction": rec_loss,
@@ -563,7 +567,8 @@ class GCPVQVAE(nn.Module):
                 dequant[valid] = decoded.to(dtype)
 
             dec_hidden = self.decoder_transformer(dequant, mask=valid)
-            coords_central, final_pose = self.rotation_decoder(dec_hidden, mask=valid)
+            decoded_flat, rigid = self.rotation_decoder(dec_hidden, mask=valid)
+            coords_central = rigid["coordinates"]
 
             if pose_header is not None:
                 rot, trans = pose_header
@@ -632,14 +637,21 @@ class GCPVQVAE(nn.Module):
             else:
                 records_out = None
 
+            pose_out = {
+                "rotations": rigid["rotations"].cpu(),
+                "translations": rigid["translations"].cpu(),
+            }
             result = {
                 "coords": coords_global.squeeze(0).cpu() if batch == 1 else coords_global.cpu(),
                 "coords_central": coords_central.squeeze(0).cpu()
                 if batch == 1
                 else coords_central.cpu(),
+                "coords_flat": decoded_flat.squeeze(0).cpu()
+                if batch == 1
+                else decoded_flat.cpu(),
                 "mask": mask_cpu.squeeze(0) if batch == 1 else mask_cpu,
                 "valid_mask": mask_cpu.squeeze(0) if batch == 1 else mask_cpu,
-                "pose": (final_pose[0].cpu(), final_pose[1].cpu()),
+                "pose": pose_out,
                 "pose_header": (rot_t.cpu(), trans_t.cpu()),
                 "records": records_out,
             }
