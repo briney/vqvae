@@ -176,6 +176,16 @@ class TransformerConfig:
     dropout: float = 0.0
     ffn_multiplier: float = 4.0
     use_rope: bool = True
+    use_ndlinear: bool = False
+    max_length: Optional[int] = None
+    num_memory_tokens: int = 0
+    use_flash_attn: bool = False
+    use_qk_norm: bool = False
+    qk_norm_groups: int = 1
+    qk_norm_scale: float = 10.0
+    qk_norm_dim_scale: bool = False
+    rotary_xpos: bool = False
+    causal: bool = False
 
 
 class GCPTokensTransformer(nn.Module):
