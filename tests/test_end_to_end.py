@@ -10,7 +10,7 @@ import torch
 from gcpvqvae.data.dataset import BackboneDataset, collate_backbones
 from gcpvqvae.geometry.frames import kabsch_align
 from gcpvqvae.geometry.metrics import rmsd
-from gcpvqvae.models.decoder import RotationDecoder
+from gcpvqvae.models.decoder import Dim6RotStructureHead
 from gcpvqvae.models.gcpnet import (
     GCPEmbeddingConfig,
     GCPFeedForwardConfig,
@@ -95,7 +95,7 @@ def _make_small_config() -> GCPVQVAEConfig:
         num_kv_heads=1,
         dropout=0.0,
     )
-    rot_cfg = RotationHeadConfig(input_dim=128, translation_scale=1.0)
+    rot_cfg = RotationHeadConfig(input_dim=128, decoder_output_scaling_factor=1.0)
     data_cfg = DataPipelineConfig(length_cap=256, knn=4)
     return GCPVQVAEConfig(gcp=gcp_cfg, encoder=enc_cfg, decoder=dec_cfg, vq=vq_cfg, rotation=rot_cfg, data=data_cfg)
 
@@ -103,12 +103,14 @@ def _make_small_config() -> GCPVQVAEConfig:
 def test_vq_decoder_pipeline_runs() -> None:
     batch, length, dim = 2, 4, 3
     vq = VectorQuantizer(num_codes=4, dim=dim, beta=0.1, decay=0.9, rotation_trick=True)
-    decoder = RotationDecoder(dim, translation_scale=0.5)
+    decoder = Dim6RotStructureHead(dim, decoder_output_scaling_factor=0.5)
 
     latents = torch.randn(batch, length, dim, requires_grad=True)
     quantized, indices, vq_loss, metrics = vq(latents, return_metrics=True)
-    coords, _ = decoder(quantized)
+    flat, aux = decoder(quantized)
+    coords = aux["coordinates"]
 
+    assert flat.shape == (batch, length, 9)
     assert coords.shape == (batch, length, 3, 3)
     assert indices.shape == (batch, length)
     total_loss = metrics["commitment"] + metrics["codebook"]

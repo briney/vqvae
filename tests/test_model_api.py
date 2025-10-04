@@ -113,7 +113,7 @@ def _make_config() -> GCPVQVAEConfig:
         num_kv_heads=1,
         dropout=0.0,
     )
-    rot_cfg = RotationHeadConfig(input_dim=128, translation_scale=1.0)
+    rot_cfg = RotationHeadConfig(input_dim=128, decoder_output_scaling_factor=1.0)
     data_cfg = DataPipelineConfig(length_cap=512, knn=4)
     return GCPVQVAEConfig(
         gcp=gcp_cfg,
@@ -215,7 +215,7 @@ def test_latent_adapter_projects_embeddings(tmp_path) -> None:
         num_kv_heads=1,
         dropout=0.0,
     )
-    rot_cfg = RotationHeadConfig(input_dim=128, translation_scale=1.0)
+    rot_cfg = RotationHeadConfig(input_dim=128, decoder_output_scaling_factor=1.0)
     data_cfg = DataPipelineConfig(length_cap=512, knn=2)
     config = GCPVQVAEConfig(
         gcp=gcp_cfg,

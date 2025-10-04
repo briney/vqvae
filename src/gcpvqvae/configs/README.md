@@ -115,7 +115,7 @@ Additional top-level options control auxiliary behaviour:
 | key | default | description |
 | --- | --- | --- |
 | `input_dim` | derived | Automatically matches the decoder output width. |
-| `translation_scale` | `1.0` | Scale factor applied to predicted translations. |
+| `decoder_output_scaling_factor` | `1.0` | Multiplier applied to the flattened decoder outputs. |
 | `template` | `null` | Optional tensor describing a template structure. |
 
 ### `model.data` – Training-time preprocessing (`DataPipelineConfig`)
