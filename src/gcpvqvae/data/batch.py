@@ -211,7 +211,8 @@ def protein_batch_from_graph_dict(
     chi = flat_chi.index_select(0, valid_indices)
     xi = flat_xi.index_select(0, valid_indices)
 
-    lengths = batch["lengths"]
+    raw_lengths = batch["lengths"]
+    lengths = mask.to(dtype=torch.long).sum(dim=1)
     node_batch = torch.repeat_interleave(
         torch.arange(batch_size, device=lengths.device, dtype=torch.long), lengths
     )
@@ -223,6 +224,27 @@ def protein_batch_from_graph_dict(
     edge_vectors = batch["edge_vectors"]
     edge_frames = batch.get("edge_frames")
     edge_batch = batch.get("edge_batch")
+
+    if valid_indices.numel() != flat_nodes:
+        remap = node_scalars.new_full((flat_nodes,), -1, dtype=torch.long)
+        remap[valid_indices] = torch.arange(
+            valid_indices.shape[0], device=remap.device, dtype=torch.long
+        )
+        src_old, dst_old = edge_index
+        src_new = remap.index_select(0, src_old)
+        dst_new = remap.index_select(0, dst_old)
+        keep_edges = (src_new >= 0) & (dst_new >= 0)
+
+        if keep_edges.ndim != 1:
+            keep_edges = keep_edges.view(-1)
+
+        edge_index = torch.stack((src_new[keep_edges], dst_new[keep_edges]), dim=0)
+        edge_scalars = edge_scalars[keep_edges]
+        edge_vectors = edge_vectors[keep_edges]
+        if edge_frames is not None:
+            edge_frames = edge_frames[keep_edges]
+        if edge_batch is not None:
+            edge_batch = edge_batch[keep_edges]
 
     storage = EdgeStorage(
         edge_index=edge_index,
@@ -249,6 +271,7 @@ def protein_batch_from_graph_dict(
         **extras,
     )
     protein_batch.lengths = lengths
+    protein_batch.full_lengths = raw_lengths
     protein_batch.valid_indices = valid_indices
     protein_batch.full_mask = mask
     protein_batch.batch_size = batch_size

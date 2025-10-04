@@ -14,6 +14,7 @@ from gcpvqvae.data.batch import EdgeStorage, ProteinBatch, protein_batch_from_gr
 from gcpvqvae.data.featurize import featurize_backbone
 from gcpvqvae.data.mmcif import PAD_INDEX, BackboneRecord, load_mmcif
 from gcpvqvae.models.decoder import RotationDecoder
+from gcpvqvae.models.decoders import GeometricTransformerDecoder
 from gcpvqvae.models.gcpnet import GCPNetConfig, GCPNetEncoder
 from gcpvqvae.models.losses import reconstruction_loss
 from gcpvqvae.models.transformer import GCPTokensTransformer, TransformerConfig
@@ -107,6 +108,8 @@ class GCPVQVAEConfig:
             decoder_out = self.decoder.output_dim
         if self.rotation.input_dim is None:
             self.rotation.input_dim = decoder_out
+        if self.decoder.use_ndlinear and self.decoder.max_length is None:
+            raise ValueError("Decoder NdLinear projection requires 'max_length' to be set")
 
 
 class GCPVQVAE(nn.Module):
@@ -147,7 +150,7 @@ class GCPVQVAE(nn.Module):
             orthogonal_reg_max_codes=self.config.vq.orthogonal_reg_max_codes,
             options=vq_options,
         )
-        self.decoder_transformer = GCPTokensTransformer(self.config.decoder)
+        self.decoder_transformer = GeometricTransformerDecoder(self.config.decoder)
         self.rotation_decoder = RotationDecoder(
             self.config.rotation.input_dim,
             translation_scale=self.config.rotation.translation_scale,
