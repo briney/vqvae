@@ -74,13 +74,13 @@ def _make_small_config() -> GCPVQVAEConfig:
         ),
         message_passing=GCPMessagePassingConfig(width=GCPWidthConfig(scalar=32, vector=4)),
         feed_forward=GCPFeedForwardConfig(width=GCPWidthConfig(scalar=64, vector=4)),
-        latent_dim=32,
+        latent_dim=64,
         num_layers=2,
     )
-    vq_cfg = VectorQuantizerConfig(num_codes=16, dim=32, beta=0.25, decay=0.9, kmeans_iters=1)
+    vq_cfg = VectorQuantizerConfig(num_codes=16, dim=128, beta=0.25, decay=0.9, kmeans_iters=1)
     enc_cfg = TransformerConfig(
         input_dim=gcp_cfg.latent_dim,
-        model_dim=64,
+        model_dim=128,
         output_dim=vq_cfg.dim,
         num_layers=2,
         num_heads=4,
@@ -89,13 +89,13 @@ def _make_small_config() -> GCPVQVAEConfig:
     )
     dec_cfg = TransformerConfig(
         input_dim=vq_cfg.dim,
-        model_dim=64,
+        model_dim=128,
         num_layers=2,
         num_heads=4,
         num_kv_heads=1,
         dropout=0.0,
     )
-    rot_cfg = RotationHeadConfig(input_dim=64, translation_scale=1.0)
+    rot_cfg = RotationHeadConfig(input_dim=128, translation_scale=1.0)
     data_cfg = DataPipelineConfig(length_cap=256, knn=4)
     return GCPVQVAEConfig(gcp=gcp_cfg, encoder=enc_cfg, decoder=dec_cfg, vq=vq_cfg, rotation=rot_cfg, data=data_cfg)
 

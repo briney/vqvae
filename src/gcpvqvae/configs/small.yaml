@@ -53,11 +53,13 @@ model:
     orthogonal_reg_weight: 1.0
   encoder:
     model_dim: 384
+    output_dim: 128
     num_layers: 4
     num_heads: 6
     num_kv_heads: 2
     dropout: 0.0
   decoder:
+    input_dim: 128
     model_dim: 384
     num_layers: 6
     num_heads: 6
