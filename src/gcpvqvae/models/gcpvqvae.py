@@ -271,19 +271,61 @@ class GCPVQVAE(nn.Module):
         return self.latent_adapter(embeddings)
 
     # ----------------------------------------------------------------- forward
-    def forward(self, batch: Dict[str, Tensor]) -> Dict[str, Tensor]:
+    def forward(
+        self,
+        batch: Dict[str, Tensor],
+        *,
+        decoder_only: bool = False,
+        return_vq_layer: bool = False,
+        mask: Optional[Tensor] = None,
+        nan_mask: Optional[Tensor] = None,
+    ) -> Dict[str, Tensor]:
         device = self._device()
         dtype = self._dtype()
 
-        mask = batch["mask"].to(torch.bool).to(device)
-        if "nan_mask" in batch:
-            mask = mask & ~batch["nan_mask"].to(torch.bool).to(device)
+        mask_tensor = mask if mask is not None else batch["mask"]
+        mask_tensor = mask_tensor.to(device=device, dtype=torch.bool)
+
+        if nan_mask is not None:
+            nan_mask_tensor = nan_mask.to(device=device, dtype=torch.bool)
+        elif "nan_mask" in batch:
+            nan_mask_tensor = ~batch["nan_mask"].to(torch.bool).to(device)
+        else:
+            nan_mask_tensor = None
+
+        valid = mask_tensor if nan_mask_tensor is None else mask_tensor & nan_mask_tensor
+
+        batch_size, max_len = mask_tensor.shape
+        latent_dim = self.config.vq.dim
+
+        if decoder_only:
+            indices = batch["indices"].to(device=device, dtype=torch.long)
+            if indices.ndim == 1:
+                indices = indices.unsqueeze(0)
+
+            quantized = torch.zeros((batch_size, max_len, latent_dim), device=device, dtype=dtype)
+            if valid.any():
+                decoded = self.vq.get_output_from_indices(indices[valid])
+                quantized[valid] = decoded.to(dtype)
+
+            dec_hidden = self.decoder_transformer(quantized, mask=valid)
+            recon_coords, final_pose = self.rotation_decoder(dec_hidden, mask=valid)
+
+            return {
+                "quantized": quantized,
+                "indices": indices,
+                "decoded": recon_coords,
+                "mask": mask_tensor,
+                "valid_mask": valid,
+                "pose": final_pose,
+                "vq_loss": torch.zeros((), device=device, dtype=dtype),
+                "vq_metrics": {},
+            }
 
         coords = batch["coords"].to(device=device, dtype=dtype)
         proto = protein_batch_from_graph_dict(batch)
         proto = proto.to(device=device, dtype=dtype)
-
-        batch_size, max_len, _ = batch["node_scalars"].shape
+        proto.full_mask = valid
 
         gcp_out = self.encoder_gcp(proto)
         flat_embeddings = gcp_out["node_embedding"]
@@ -293,23 +335,33 @@ class GCPVQVAE(nn.Module):
         embeddings = padded.reshape(batch_size, max_len, latent_dim)
         projected = self._project_embeddings(embeddings)
 
-        enc_hidden = self.encoder_transformer(projected, mask=mask)
-        quantized, indices, vq_losses = self.vq(enc_hidden, mask=mask)
+        enc_hidden = self.encoder_transformer(projected, mask=valid)
+        vq_out = self.vq(enc_hidden, mask=valid, return_metrics=True)
+        quantized, indices, vq_loss, vq_metrics = vq_out
 
-        dec_hidden = self.decoder_transformer(quantized, mask=mask)
-        recon_coords, final_pose = self.rotation_decoder(dec_hidden, mask=mask)
+        if return_vq_layer:
+            return {
+                "gcp_embeddings": embeddings,
+                "encoder_hidden": enc_hidden,
+                "quantized": quantized,
+                "indices": indices,
+                "mask": mask_tensor,
+                "valid_mask": valid,
+                "vq_loss": vq_loss,
+                "vq_metrics": vq_metrics,
+            }
+
+        dec_hidden = self.decoder_transformer(quantized, mask=valid)
+        recon_coords, final_pose = self.rotation_decoder(dec_hidden, mask=valid)
 
         rec_loss, rec_components = reconstruction_loss(
             recon_coords,
             coords,
-            mask=mask,
+            mask=valid,
             return_components=True,
         )
 
-        total_loss = rec_loss
-        total_loss = total_loss + vq_losses["commitment"]
-        total_loss = total_loss + vq_losses["codebook"]
-        total_loss = total_loss + vq_losses["orthogonality"]
+        total_loss = rec_loss + vq_loss
 
         return {
             "gcp_embeddings": embeddings,
@@ -317,9 +369,11 @@ class GCPVQVAE(nn.Module):
             "quantized": quantized,
             "indices": indices,
             "decoded": recon_coords,
-            "mask": mask,
+            "mask": mask_tensor,
+            "valid_mask": valid,
             "pose": final_pose,
-            "vq_losses": vq_losses,
+            "vq_loss": vq_loss,
+            "vq_metrics": vq_metrics,
             "reconstruction": rec_loss,
             "reconstruction_components": rec_components,
             "total_loss": total_loss,
@@ -390,9 +444,20 @@ class GCPVQVAE(nn.Module):
         gcp_out = self.encoder_gcp(proto)
         embeddings = gcp_out["node_embedding"].unsqueeze(0)
         projected = self._project_embeddings(embeddings)
-        enc_hidden = self.encoder_transformer(projected, mask=mask.unsqueeze(0))
-        quantized, indices, vq_losses = self.vq(enc_hidden, mask=mask.unsqueeze(0))
-        return embeddings, enc_hidden, quantized, {"indices": indices, "vq": vq_losses}
+        valid = mask.unsqueeze(0)
+        enc_hidden = self.encoder_transformer(projected, mask=valid)
+        vq_out = self.vq(enc_hidden, mask=valid, return_metrics=True)
+        quantized, indices, vq_loss, vq_metrics = vq_out
+        return (
+            embeddings,
+            enc_hidden,
+            quantized,
+            {
+                "indices": indices,
+                "vq_loss": vq_loss,
+                "vq_metrics": vq_metrics,
+            },
+        )
 
     # ------------------------------------------------------------------- encode
     @torch.no_grad()
@@ -421,6 +486,8 @@ class GCPVQVAE(nn.Module):
             if record.nan_mask.numel():
                 mask = mask & ~record.nan_mask
 
+            valid = mask
+
             embeddings, enc_hidden, quantized, extras = self._run_encoder(
                 features["node_scalars"],
                 features["node_vectors"],
@@ -429,16 +496,18 @@ class GCPVQVAE(nn.Module):
                 features["edge_scalars"],
                 features["edge_vectors"],
                 features["edge_frames"],
-                mask,
+                valid,
             )
 
             indices = extras["indices"].squeeze(0).cpu()
-            vq_losses = extras["vq"]
+            vq_loss = extras["vq_loss"]
+            vq_metrics = extras["vq_metrics"]
 
             result = {
                 "tokens": indices.clone(),
                 "length": int(record.length),
                 "mask": mask.clone().cpu(),
+                "valid_mask": valid.clone().cpu(),
                 "pose_header": (
                     record.rotation.clone().cpu(),
                     record.translation.clone().cpu(),
@@ -446,7 +515,8 @@ class GCPVQVAE(nn.Module):
                 "gcp_embeddings": embeddings.squeeze(0).cpu(),
                 "encoder_embeddings": enc_hidden.squeeze(0).cpu(),
                 "quantized": quantized.squeeze(0).cpu(),
-                "vq_losses": {k: v.detach().cpu() for k, v in vq_losses.items()},
+                "vq_loss": vq_loss.squeeze(0).detach().cpu(),
+                "vq_metrics": {k: v.detach().cpu() for k, v in vq_metrics.items()},
                 "metadata": self._build_metadata(record),
             }
             return result
@@ -489,10 +559,8 @@ class GCPVQVAE(nn.Module):
                 decoded = self.vq.get_output_from_indices(flat_indices)
                 dequant[valid] = decoded.to(dtype)
 
-            dec_hidden = self.decoder_transformer(dequant, mask=mask_tensor)
-            coords_central, final_pose = self.rotation_decoder(
-                dec_hidden, mask=mask_tensor
-            )
+            dec_hidden = self.decoder_transformer(dequant, mask=valid)
+            coords_central, final_pose = self.rotation_decoder(dec_hidden, mask=valid)
 
             if pose_header is not None:
                 rot, trans = pose_header
@@ -509,7 +577,7 @@ class GCPVQVAE(nn.Module):
             coords_global = coords_central @ rot_t.transpose(-1, -2)
             coords_global = coords_global + trans_t.unsqueeze(1).unsqueeze(2)
 
-            mask_cpu = mask_tensor.clone().cpu()
+            mask_cpu = valid.clone().cpu()
 
             records_out: Optional[Any]
             if metadata is not None:
@@ -567,6 +635,7 @@ class GCPVQVAE(nn.Module):
                 if batch == 1
                 else coords_central.cpu(),
                 "mask": mask_cpu.squeeze(0) if batch == 1 else mask_cpu,
+                "valid_mask": mask_cpu.squeeze(0) if batch == 1 else mask_cpu,
                 "pose": (final_pose[0].cpu(), final_pose[1].cpu()),
                 "pose_header": (rot_t.cpu(), trans_t.cpu()),
                 "records": records_out,

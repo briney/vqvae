@@ -33,14 +33,13 @@ def test_vector_quantizer_forward_shapes() -> None:
     vq = _make_vq(dim, num_codes)
 
     latents = torch.randn(batch, length, dim, requires_grad=True)
-    quantized, indices, losses = vq(latents)
+    quantized, indices, loss, metrics = vq(latents, return_metrics=True)
 
     assert quantized.shape == (batch, length, dim)
     assert indices.shape == (batch, length)
-    assert {"commitment", "codebook", "orthogonality", "perplexity"} <= set(losses)
+    assert {"commitment", "codebook", "orthogonality", "perplexity"} <= set(metrics)
 
-    total_loss = losses["commitment"] + losses["codebook"] + losses["orthogonality"]
-    total_loss.backward()
+    loss.backward()
     assert torch.isfinite(latents.grad).all()
 
 
@@ -52,11 +51,11 @@ def test_vector_quantizer_supports_masks() -> None:
     latents = torch.randn(batch, length, dim, requires_grad=True)
     mask = torch.tensor([[True, True, False, True, False, False]])
 
-    quantized, indices, losses = vq(latents, mask=mask)
+    quantized, indices, loss, metrics = vq(latents, mask=mask, return_metrics=True)
 
     assert quantized.shape == (batch, length, dim)
     assert torch.equal(indices[~mask], torch.full((3,), -1, dtype=torch.long))
-    assert losses["perplexity"].item() >= 1.0
+    assert metrics["perplexity"].item() >= 1.0
 
 
 def test_get_output_from_indices_matches_quantized_vectors() -> None:
