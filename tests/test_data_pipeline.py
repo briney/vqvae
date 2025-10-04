@@ -8,9 +8,19 @@ import gemmi
 import pytest
 import torch
 
+from gcpvqvae.data.batch import protein_batch_from_graph_dict
 from gcpvqvae.data.dataset import BackboneDataset, collate_backbones
 from gcpvqvae.data.featurize import featurize_backbone
 from gcpvqvae.data.mmcif import PAD_INDEX, load_mmcif
+from gcpvqvae.data.preprocessing import preprocess_dataset
+from gcpvqvae.models.gcpnet import (
+    GCPEmbeddingConfig,
+    GCPFeedForwardConfig,
+    GCPMessagePassingConfig,
+    GCPNetConfig,
+    GCPNetEncoder,
+    GCPWidthConfig,
+)
 
 
 def _add_atom(residue: gemmi.Residue, name: str, position, *, occ: float = 1.0, altloc: str = "") -> None:
@@ -170,6 +180,97 @@ def test_featurize_backbone_produces_expected_shapes(tmp_path, suffix):
         identity = torch.eye(3, dtype=frames.dtype)
         orthogonality = frames.transpose(-1, -2) @ frames
         assert torch.allclose(orthogonality, identity.expand_as(orthogonality), atol=1e-4)
+
+
+def _make_encoder_config() -> GCPNetConfig:
+    return GCPNetConfig(
+        embedding=GCPEmbeddingConfig(
+            node_scalar_dim=6,
+            node_vector_dim=3,
+            edge_scalar_dim=8,
+            edge_vector_dim=1,
+            output=GCPWidthConfig(scalar=32, vector=4),
+        ),
+        message_passing=GCPMessagePassingConfig(width=GCPWidthConfig(scalar=32, vector=4)),
+        feed_forward=GCPFeedForwardConfig(width=GCPWidthConfig(scalar=64, vector=4)),
+        latent_dim=16,
+        num_layers=1,
+    )
+
+
+def test_backbone_dataset_batch_matches_gcpnet_expectations(tmp_path):
+    structure_path = tmp_path / "toy.cif"
+    _build_test_structure(structure_path)
+
+    dataset = BackboneDataset(structure_path, k=2, progress=False)
+    sample = dataset[0]
+    batch = collate_backbones([sample])
+    protein_batch = protein_batch_from_graph_dict(batch)
+
+    config = _make_encoder_config()
+    encoder = GCPNetEncoder(config)
+
+    expected_nodes = int(batch["lengths"].sum().item())
+    assert protein_batch.h.shape == (expected_nodes, config.node_scalar_dim)
+    assert protein_batch.chi.shape == (expected_nodes, config.node_vector_dim, 3)
+
+    edge_storage = next(iter(protein_batch.e.values()))
+    assert edge_storage.scalars.shape[1] == config.edge_scalar_dim
+    assert edge_storage.vectors.shape[-1] == 3
+
+    outputs = encoder(protein_batch)
+
+    node_embedding = outputs["node_embedding"]
+    graph_embedding = outputs["graph_embedding"]
+    assert node_embedding.shape[0] == expected_nodes
+    assert graph_embedding.shape == (protein_batch.num_graphs(), config.latent_dim)
+    assert torch.all(torch.isfinite(node_embedding))
+    assert torch.all(torch.isfinite(graph_embedding))
+
+
+def test_preprocessed_dataset_batch_matches_gcpnet_expectations(tmp_path):
+    structure_path = tmp_path / "toy.cif"
+    _build_test_structure(structure_path)
+
+    raw_dataset = BackboneDataset(structure_path, k=2, progress=False)
+    raw_sample = raw_dataset[0]
+
+    processed_root = tmp_path / "processed"
+    preprocess_dataset(structure_path, processed_root, k=2, progress=False)
+
+    processed_dataset = BackboneDataset(processed_root, k=2, progress=False)
+    processed_sample = processed_dataset[0]
+
+    for key in (
+        "coords",
+        "mask",
+        "node_scalars",
+        "node_vectors",
+        "edge_index",
+        "edge_scalars",
+        "edge_vectors",
+    ):
+        assert torch.allclose(processed_sample[key], raw_sample[key])
+
+    batch = collate_backbones([processed_sample])
+    protein_batch = protein_batch_from_graph_dict(batch)
+
+    config = _make_encoder_config()
+    encoder = GCPNetEncoder(config)
+
+    expected_nodes = int(batch["lengths"].sum().item())
+    assert protein_batch.h.shape == (expected_nodes, config.node_scalar_dim)
+    assert protein_batch.batch_size == batch["coords"].shape[0]
+    assert torch.equal(protein_batch.lengths, batch["lengths"])
+
+    outputs = encoder(protein_batch)
+
+    node_embedding = outputs["node_embedding"]
+    graph_embedding = outputs["graph_embedding"]
+    assert node_embedding.shape[0] == expected_nodes
+    assert graph_embedding.shape == (protein_batch.num_graphs(), config.latent_dim)
+    assert torch.all(torch.isfinite(node_embedding))
+    assert torch.all(torch.isfinite(graph_embedding))
 
 
 def test_dataset_and_collate(tmp_path):
