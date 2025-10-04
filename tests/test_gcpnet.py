@@ -1,5 +1,7 @@
 from pathlib import Path
+from pathlib import Path
 
+import pytest
 import torch
 
 from gcpvqvae.data.batch import EdgeStorage, ProteinBatch
@@ -14,8 +16,22 @@ from gcpvqvae.models.gcpnet import (
     ScalarVector,
 )
 from gcpvqvae.models.gcpvqvae import GCPVQVAE
+from gcpvqvae.system.configuration import build_model_config, compose_overrides
 from gcpvqvae.system.train_gcpnet import _prepare_model_config
 from gcpvqvae.utils.checkpoint import load_checkpoint
+
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_CHECKPOINT_PATH = (
+    _REPO_ROOT
+    / "models"
+    / "checkpoints"
+    / "gcpnet"
+    / "structure_denoising"
+    / "ca_bb"
+    / "last.ckpt"
+)
+_CONFIG_DIR = _REPO_ROOT / "src" / "gcpvqvae" / "configs"
 
 
 def test_gcpnet_encoder_projects_edge_scalars_with_default_input_dim() -> None:
@@ -139,18 +155,7 @@ def test_gcpnet_encoder_supports_bfloat16_inputs() -> None:
 
 
 def test_gcpnet_reference_checkpoint_loads() -> None:
-    checkpoint_path = (
-        Path(__file__)
-        .resolve()
-        .parents[1]
-        / "models"
-        / "checkpoints"
-        / "structure_denoising"
-        / "gcpnet"
-        / "last.ckpt"
-    )
-
-    state = load_checkpoint(checkpoint_path, map_location="cpu")
+    state = load_checkpoint(_CHECKPOINT_PATH, map_location="cpu")
     state_dict = GCPVQVAE._extract_gcp_state_dict(state)
 
     assert state_dict is not None
@@ -160,3 +165,25 @@ def test_gcpnet_reference_checkpoint_loads() -> None:
     model_state = encoder.state_dict()
 
     assert isinstance(model_state, dict)
+
+
+@pytest.mark.parametrize("config_name", ["base", "small", "xsmall"])
+def test_packaged_configs_initialize_gcpnet_from_pretrained_weights(config_name: str) -> None:
+    raw = compose_overrides(_CONFIG_DIR / f"{config_name}.yaml", ())
+    model_config = build_model_config(raw.get("model"))
+
+    model = GCPVQVAE(model_config)
+
+    raw_state = load_checkpoint(_CHECKPOINT_PATH, map_location="cpu")
+    extracted = GCPVQVAE._extract_gcp_state_dict(raw_state)
+    assert extracted is not None
+
+    model_state = model.encoder_gcp.state_dict()
+    mapped = GCPVQVAE._coerce_gcp_state_dict(extracted, model_state)
+
+    assert mapped, "expected pretrained weights to map onto the encoder"
+    assert "embedding.node_scalar_proj.weight" in mapped
+
+    for key, tensor in mapped.items():
+        assert key in model_state
+        assert torch.equal(model_state[key], tensor)

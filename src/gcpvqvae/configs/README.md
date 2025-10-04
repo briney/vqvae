@@ -31,11 +31,17 @@ omitted the defaults listed below are applied by the underlying dataclasses.
 The encoder settings are organised into nested blocks:
 
 - `embedding`
-  - `node_scalar_dim` (`49`): input scalar channels per residue.
+- `node_scalar_dim` (`49`): input scalar channels per residue.  Packaged training
+  configurations set this to `74` to match the provided pretrained encoder
+  weights.
   - `node_vector_dim` (`2`): input vector channels per residue.
-  - `edge_scalar_dim` (`9`): scalar edge features produced by preprocessing.
-  - `edge_scalar_input_dim` (`8`): raw edge scalar dimensionality; defaults to the preprocessor output when omitted.
-  - `edge_vector_dim` (`1`): vector channels per edge.
+- `edge_scalar_dim` (`9`): scalar edge features produced by preprocessing.  The
+  packaged configs use `32` in order to consume the released checkpoint.
+- `edge_scalar_input_dim` (`8`): raw edge scalar dimensionality; defaults to the preprocessor output when omitted.  The packaged
+  configs reduce this to `6` so that `edge_scalar_dim + num_rbf` aligns with the
+  pretrained weights.
+- `edge_vector_dim` (`1`): vector channels per edge.  The packaged configs
+  increase this to `4` to mirror the pretrained encoder.
   - `edge_vector_input_dim` (`1`): raw edge vector dimensionality; defaults to `edge_vector_dim`.
   - `output.scalar` (`128`) / `output.vector` (`16`): widths of the projected node features.
 - `message_passing`
@@ -58,7 +64,10 @@ Additional top-level options control auxiliary behaviour:
 - `predict_node_rep` (`False`): placeholder controlling auxiliary representation heads.
 - `use_gcp_dropout` (`True`): selects coupled scalar/vector dropout; disable to fall back to independent dropout.
 - `norm_pos_diff` (`False`): toggles normalisation of positional differences.
-- `init` (`"random"`), `init_checkpoint` (`null`), `strict_init` (`True`): checkpoint initialisation controls.
+- `init` (`"random"`), `init_checkpoint` (`null`), `strict_init` (`True`): checkpoint initialisation controls.  The packaged
+  training configurations default to `init: "pretrained"` with
+  `init_checkpoint: "models/checkpoints/gcpnet/structure_denoising/ca_bb/last.ckpt"`; override
+  these fields to fall back to random initialisation or to use a custom encoder checkpoint.
 
 ### `model.adapter` – Latent projection (`LatentAdapterConfig`)
 

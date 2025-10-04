@@ -164,8 +164,15 @@ class GCPVQVAE(nn.Module):
                 "'gcp_state', 'model_state', 'state_dict', or a raw state dict"
             )
 
+        target_state = self.encoder_gcp.state_dict()
+        coerced = self._coerce_gcp_state_dict(state_dict, target_state)
+        if not coerced:
+            raise ValueError(
+                "Checkpoint does not contain compatible GCPNet parameters for the current configuration"
+            )
+
         missing, unexpected = self.encoder_gcp.load_state_dict(
-            state_dict, strict=getattr(self.config.gcp, "strict_init", True)
+            coerced, strict=getattr(self.config.gcp, "strict_init", True)
         )
         if missing or unexpected:
             warnings.warn(
@@ -197,6 +204,38 @@ class GCPVQVAE(nn.Module):
             return {k: v for k, v in state.items() if isinstance(v, torch.Tensor)}
 
         return None
+
+    @staticmethod
+    def _coerce_gcp_state_dict(
+        source: Mapping[str, Tensor], target: Mapping[str, Tensor]
+    ) -> Dict[str, Tensor]:
+        coerced: Dict[str, Tensor] = {}
+        for key, tensor in source.items():
+            if key in target and isinstance(tensor, torch.Tensor):
+                if tensor.shape == target[key].shape:
+                    coerced[key] = tensor
+
+        rename_map = {
+            "embedding.node_scalar_proj.weight": "encoder.gcp_embedding.node_embedding.scalar_out.weight",
+            "embedding.node_vector_proj": "encoder.gcp_embedding.node_embedding.vector_down.weight",
+            "embedding.edge_scalar_proj.weight": "encoder.gcp_embedding.edge_embedding.scalar_out.weight",
+            "embedding.edge_vector_proj": "encoder.gcp_embedding.edge_embedding.vector_down.weight",
+        }
+
+        for new_key, old_key in rename_map.items():
+            if new_key in coerced:
+                continue
+            tensor = source.get(old_key)
+            target_tensor = target.get(new_key)
+            if tensor is None or target_tensor is None:
+                continue
+            if not isinstance(tensor, torch.Tensor):
+                continue
+            if tensor.shape != target_tensor.shape:
+                continue
+            coerced[new_key] = tensor
+
+        return coerced
 
     def _device(self) -> torch.device:
         return next(self.parameters()).device

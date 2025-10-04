@@ -10,11 +10,11 @@ data:
 model:
   gcp:
     embedding:
-      node_scalar_dim: 49
+      node_scalar_dim: 74
       node_vector_dim: 2
-      edge_scalar_dim: 9
-      edge_scalar_input_dim: 8
-      edge_vector_dim: 1
+      edge_scalar_dim: 32
+      edge_scalar_input_dim: 6
+      edge_vector_dim: 4
       output:
         scalar: 128
         vector: 16
@@ -39,9 +39,9 @@ model:
     predict_node_rep: false
     use_gcp_dropout: true
     norm_pos_diff: false
-    init: random
-    init_checkpoint: null
-    strict_init: true
+    init: pretrained            # set to "random" to disable checkpoint initialisation
+    init_checkpoint: "models/checkpoints/gcpnet/structure_denoising/ca_bb/last.ckpt"
+    strict_init: false
   adapter:
     enabled: true
     output_dim: 16
