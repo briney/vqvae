@@ -44,20 +44,22 @@ model:
     strict_init: false
   adapter:
     enabled: true
-    output_dim: 16
+    output_dim: 32
   vq:
     num_codes: 16
-    dim: 16
+    dim: 128
     beta: 0.25
     decay: 0.99
     kmeans_iters: 1
   encoder:
     model_dim: 64
+    output_dim: 128
     num_layers: 2
     num_heads: 2
     num_kv_heads: 1
     dropout: 0.0
   decoder:
+    input_dim: 128
     model_dim: 64
     num_layers: 2
     num_heads: 2

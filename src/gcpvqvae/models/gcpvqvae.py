@@ -73,11 +73,11 @@ class GCPVQVAEConfig:
 
     gcp: GCPNetConfig = field(default_factory=GCPNetConfig)
     encoder: TransformerConfig = field(
-        default_factory=lambda: TransformerConfig(input_dim=256, output_dim=256)
+        default_factory=lambda: TransformerConfig(input_dim=128, output_dim=128)
     )
     decoder: TransformerConfig = field(
         default_factory=lambda: TransformerConfig(
-            input_dim=256, num_layers=16, num_heads=16, num_kv_heads=1
+            input_dim=128, num_layers=16, num_heads=16, num_kv_heads=1
         )
     )
     vq: VectorQuantizerConfig = field(default_factory=VectorQuantizerConfig)
