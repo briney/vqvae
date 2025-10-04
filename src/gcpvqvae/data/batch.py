@@ -211,12 +211,19 @@ def protein_batch_from_graph_dict(
     chi = flat_chi.index_select(0, valid_indices)
     xi = flat_xi.index_select(0, valid_indices)
 
-    lengths = batch["lengths"]
+    # ``lengths`` in the collated batch reflects the padded sequence length.  GCPNet
+    # operates only on the valid residues (where ``mask`` is ``True``), so we need
+    # to build the PyG bookkeeping tensors from the masked counts instead of the
+    # padded lengths.  Otherwise ``batch`` would report more nodes than there are
+    # coordinate entries which leads to shape mismatches when centralising the
+    # node positions during message passing.
+    valid_lengths = mask.to(dtype=torch.long).sum(dim=1)
     node_batch = torch.repeat_interleave(
-        torch.arange(batch_size, device=lengths.device, dtype=torch.long), lengths
+        torch.arange(batch_size, device=valid_lengths.device, dtype=torch.long),
+        valid_lengths,
     )
-    ptr = torch.zeros((batch_size + 1,), dtype=torch.long, device=lengths.device)
-    ptr[1:] = torch.cumsum(lengths, dim=0)
+    ptr = torch.zeros((batch_size + 1,), dtype=torch.long, device=valid_lengths.device)
+    ptr[1:] = torch.cumsum(valid_lengths, dim=0)
 
     edge_index = batch["edge_index"]
     edge_scalars = batch["edge_scalars"]
@@ -248,7 +255,8 @@ def protein_batch_from_graph_dict(
         mask=torch.ones_like(node_batch, dtype=torch.bool),
         **extras,
     )
-    protein_batch.lengths = lengths
+    protein_batch.lengths = valid_lengths
+    protein_batch.original_lengths = batch["lengths"]
     protein_batch.valid_indices = valid_indices
     protein_batch.full_mask = mask
     protein_batch.batch_size = batch_size
