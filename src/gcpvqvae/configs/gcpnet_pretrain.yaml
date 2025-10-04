@@ -42,7 +42,7 @@ model:
     norm_pos_diff: false
   rotation:
     input_dim: null
-    translation_scale: 1.0
+    decoder_output_scaling_factor: 1.0
 
 train:
   seed: 42
