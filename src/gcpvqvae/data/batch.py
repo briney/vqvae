@@ -231,6 +231,44 @@ def protein_batch_from_graph_dict(
     edge_frames = batch.get("edge_frames")
     edge_batch = batch.get("edge_batch")
 
+    if edge_index.numel():
+        device = edge_index.device
+        index_map = torch.full(
+            (flat_nodes,),
+            -1,
+            dtype=torch.long,
+            device=device,
+        )
+        index_map[valid_indices] = torch.arange(
+            valid_indices.numel(), device=device, dtype=torch.long
+        )
+
+        mapped_src = index_map.index_select(0, edge_index[0])
+        mapped_dst = index_map.index_select(0, edge_index[1])
+        edge_mask = (mapped_src >= 0) & (mapped_dst >= 0)
+
+        mapped_src = mapped_src[edge_mask]
+        mapped_dst = mapped_dst[edge_mask]
+
+        edge_index = torch.stack((mapped_src, mapped_dst), dim=0)
+
+        if edge_scalars.numel():
+            edge_scalars = edge_scalars[edge_mask]
+        if edge_vectors.numel():
+            edge_vectors = edge_vectors[edge_mask]
+        if edge_frames is not None and edge_frames.numel():
+            edge_frames = edge_frames[edge_mask]
+        if edge_batch is not None and edge_batch.numel():
+            edge_batch = edge_batch[edge_mask]
+    else:
+        # Ensure tensors remain empty with consistent shapes when there are no edges.
+        edge_scalars = edge_scalars[:0]
+        edge_vectors = edge_vectors[:0]
+        if edge_frames is not None:
+            edge_frames = edge_frames[:0]
+        if edge_batch is not None:
+            edge_batch = edge_batch[:0]
+
     storage = EdgeStorage(
         edge_index=edge_index,
         scalars=edge_scalars,
