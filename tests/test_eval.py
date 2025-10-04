@@ -140,8 +140,14 @@ class FakeModel(nn.Module):
             torch.zeros_like(mask, dtype=torch.long),
             torch.full_like(mask, -1, dtype=torch.long),
         )
-        vq_losses = {"perplexity": torch.tensor(2.0, device=self.dummy.device)}
-        return {"decoded": decoded, "mask": mask, "indices": indices, "vq_losses": vq_losses}
+        vq_metrics = {"perplexity": torch.tensor(2.0, device=self.dummy.device)}
+        return {
+            "decoded": decoded,
+            "mask": mask,
+            "valid_mask": mask,
+            "indices": indices,
+            "vq_metrics": vq_metrics,
+        }
 
 
 def test_evaluate_reports_summary(tmp_path, monkeypatch) -> None:

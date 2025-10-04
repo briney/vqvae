@@ -329,7 +329,9 @@ def run_model_evaluation(
                 outputs = model(batch)
 
                 decoded = outputs["decoded"].detach()
-                mask = outputs.get("mask")
+                mask = outputs.get("valid_mask")
+                if mask is None:
+                    mask = outputs.get("mask")
                 if mask is None:
                     mask = batch["mask"].to(decoded.device)
                 mask = mask.to(torch.bool)
@@ -387,9 +389,9 @@ def run_model_evaluation(
                         if valid_unique.numel() > 0:
                             code_usage[valid_unique.cpu()] = True
 
-                vq_losses = outputs.get("vq_losses")
-                if isinstance(vq_losses, dict) and "perplexity" in vq_losses:
-                    perplexity = vq_losses["perplexity"]
+                vq_metrics = outputs.get("vq_metrics")
+                if isinstance(vq_metrics, dict) and "perplexity" in vq_metrics:
+                    perplexity = vq_metrics["perplexity"]
                     perplexities.append(float(perplexity.detach().cpu().item()))
 
                 if runtime_cfg.max_batches is not None and batch_idx + 1 >= runtime_cfg.max_batches:
