@@ -985,7 +985,9 @@ class Trainer:
                                 self.model.commit_updates()
                             accum_counter += 1
 
-                            batch_mask = batch["mask"]
+                            batch_mask = outputs.get("valid_mask")
+                            if batch_mask is None:
+                                batch_mask = batch["mask"]
                             batch_size = int(batch_mask.shape[0])
                             residue_count = int(batch_mask.sum().item())
 
@@ -1023,27 +1025,30 @@ class Trainer:
                                 target_coords = batch["coords"].to(
                                     device=self.device, dtype=outputs["decoded"].dtype
                                 )
+                                rmsd_mask = outputs.get("valid_mask", outputs["mask"])
                                 rmsd_val = rmsd(
-                                    outputs["decoded"].detach(), target_coords, mask=outputs["mask"]
+                                    outputs["decoded"].detach(),
+                                    target_coords,
+                                    mask=rmsd_mask,
                                 ).item()
                                 trackers["rmsd"].update(rmsd_val, batch_size)
-                                vq_losses = outputs.get("vq_losses", {})
-                                commitment_loss = vq_losses.get("commitment")
+                                vq_metrics = outputs.get("vq_metrics", {})
+                                commitment_loss = vq_metrics.get("commitment")
                                 if commitment_loss is not None:
                                     trackers["vq_commitment"].update(
                                         float(commitment_loss.detach().item()), batch_size
                                     )
-                                codebook_loss = vq_losses.get("codebook")
+                                codebook_loss = vq_metrics.get("codebook")
                                 if codebook_loss is not None:
                                     trackers["vq_codebook"].update(
                                         float(codebook_loss.detach().item()), batch_size
                                     )
-                                orth_loss = vq_losses.get("orthogonality")
+                                orth_loss = vq_metrics.get("orthogonality")
                                 if orth_loss is not None:
                                     trackers["vq_orthogonality"].update(
                                         float(orth_loss.detach().item()), batch_size
                                     )
-                                perplexity = vq_losses.get("perplexity")
+                                perplexity = vq_metrics.get("perplexity")
                                 if perplexity is not None:
                                     trackers["perplexity"].update(float(perplexity.detach().item()))
 

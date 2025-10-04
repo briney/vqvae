@@ -81,8 +81,9 @@ class VectorQuantizer(nn.Module):
         latents: Tensor,
         *,
         mask: Optional[Tensor] = None,
-    ) -> Tuple[Tensor, Tensor, Dict[str, Tensor]]:
-        """Quantise ``latents`` and return embeddings, indices, and loss terms."""
+        return_metrics: bool = False,
+    ) -> Tuple[Tensor, Tensor, Tensor] | Tuple[Tensor, Tensor, Tensor, Dict[str, Tensor]]:
+        """Quantise ``latents`` and return embeddings, indices, and the scalar loss."""
 
         if latents.size(-1) != self.dim:
             raise ValueError(f"Expected latent dim {self.dim}, got {latents.size(-1)}")
@@ -98,10 +99,12 @@ class VectorQuantizer(nn.Module):
         if indices.ndim > latents.ndim - 1:
             indices = indices.squeeze(-1)
 
-        losses = self._build_loss_dict(total_loss, breakdown)
-        losses["perplexity"] = self._perplexity(indices, mask_tensor, latents.dtype)
+        metrics = self._build_loss_dict(total_loss, breakdown)
+        metrics["perplexity"] = self._perplexity(indices, mask_tensor, latents.dtype)
 
-        return quantized, indices, losses
+        if return_metrics:
+            return quantized, indices, metrics["total"], metrics
+        return quantized, indices, metrics["total"]
 
     def freeze_codebook(self) -> None:
         """Prevent further codebook updates."""

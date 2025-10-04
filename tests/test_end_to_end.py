@@ -106,13 +106,14 @@ def test_vq_decoder_pipeline_runs() -> None:
     decoder = RotationDecoder(dim, translation_scale=0.5)
 
     latents = torch.randn(batch, length, dim, requires_grad=True)
-    quantized, indices, losses = vq(latents)
+    quantized, indices, vq_loss, metrics = vq(latents, return_metrics=True)
     coords, _ = decoder(quantized)
 
     assert coords.shape == (batch, length, 3, 3)
     assert indices.shape == (batch, length)
-    total_loss = losses["commitment"] + losses["codebook"]
-    total_loss.backward()
+    total_loss = metrics["commitment"] + metrics["codebook"]
+    assert torch.allclose(total_loss, vq_loss)
+    vq_loss.backward()
     assert torch.isfinite(latents.grad).all()
 
 
