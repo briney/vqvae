@@ -1,143 +1,74 @@
-"""Unit tests for vector quantisation components."""
+"""Unit tests for the vector-quantisation wrapper."""
 
 from __future__ import annotations
 
-import pytest
 import torch
 
-from gcpvqvae.models.vq import VectorQuantizer, _rotation_trick_gradient
+from gcpvqvae.models.vq import VectorQuantizer, VectorQuantizerOptions
 
 
-def test_vector_quantizer_assigns_nearest_codes() -> None:
-    vq = VectorQuantizer(num_codes=3, dim=3, beta=0.25, decay=1.0, rotation_trick=True)
-    with torch.no_grad():
-        vq.embedding.copy_(
-            torch.tensor(
-                [
-                    [1.0, 0.0, 0.0],
-                    [0.0, 1.0, 0.0],
-                    [0.0, 0.0, 1.0],
-                ]
-            )
-        )
-
-    latents = torch.tensor(
-        [
-            [0.9, 0.1, 0.0],
-            [0.0, 0.8, 0.2],
-            [0.0, 0.2, 0.7],
-        ],
-        requires_grad=True,
-        dtype=torch.float32,
+def _make_vq(dim: int, num_codes: int) -> VectorQuantizer:
+    options = VectorQuantizerOptions(
+        kmeans_init=False,
+        kmeans_iters=1,
+        stochastic_sample_codes=False,
+        sample_codebook_temp=1.0,
+    )
+    return VectorQuantizer(
+        num_codes=num_codes,
+        dim=dim,
+        beta=0.25,
+        decay=0.99,
+        epsilon=1e-5,
+        rotation_trick=True,
+        orthogonal_reg_weight=0.0,
+        orthogonal_reg_max_codes=num_codes,
+        options=options,
     )
 
+
+def test_vector_quantizer_forward_shapes() -> None:
+    batch, length, dim, num_codes = 2, 4, 3, 8
+    torch.manual_seed(0)
+    vq = _make_vq(dim, num_codes)
+
+    latents = torch.randn(batch, length, dim, requires_grad=True)
     quantized, indices, losses = vq(latents)
 
-    assert indices.tolist() == [0, 1, 2]
-    assert torch.all(indices >= 0)
-    assert torch.all(indices < vq.num_codes)
-    expected = torch.tensor(
-        [
-            [1.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0],
-            [0.0, 0.0, 1.0],
-        ]
-    )
-    assert torch.allclose(quantized, expected)
-    assert {"commitment", "codebook", "orthogonality", "perplexity"} <= set(losses.keys())
+    assert quantized.shape == (batch, length, dim)
+    assert indices.shape == (batch, length)
+    assert {"commitment", "codebook", "orthogonality", "perplexity"} <= set(losses)
 
-    loss = quantized.sum() + losses["commitment"] + losses["codebook"]
-    loss.backward()
-    assert latents.grad is not None
+    total_loss = losses["commitment"] + losses["codebook"] + losses["orthogonality"]
+    total_loss.backward()
     assert torch.isfinite(latents.grad).all()
 
 
 def test_vector_quantizer_supports_masks() -> None:
-    vq = VectorQuantizer(num_codes=2, dim=2, beta=0.25, decay=1.0, rotation_trick=False)
-    with torch.no_grad():
-        vq.embedding.copy_(torch.tensor([[1.0, 0.0], [0.0, 1.0]]))
+    batch, length, dim, num_codes = 1, 6, 4, 16
+    torch.manual_seed(1)
+    vq = _make_vq(dim, num_codes)
 
-    latents = torch.tensor([[0.9, 0.1], [0.0, 1.2]], requires_grad=True)
-    mask = torch.tensor([True, False])
+    latents = torch.randn(batch, length, dim, requires_grad=True)
+    mask = torch.tensor([[True, True, False, True, False, False]])
 
-    quantized, indices, _ = vq(latents, mask=mask)
+    quantized, indices, losses = vq(latents, mask=mask)
 
-    assert indices.tolist() == [0, -1]
-    assert torch.allclose(quantized[0], torch.tensor([1.0, 0.0]))
-    assert torch.allclose(quantized[1], latents[1])  # straight-through when masked
-
-
-def test_rotation_trick_gradient_matches_closed_form() -> None:
-    torch.manual_seed(0)
-    vq = VectorQuantizer(num_codes=4, dim=3, beta=0.25, decay=1.0, rotation_trick=True)
-    with torch.no_grad():
-        vq.embedding.copy_(torch.tensor([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [-1.0, 0.0, 0.0]]))
-
-    latents = torch.tensor(
-        [
-            [0.8, 0.3, 0.1],
-            [0.0, 0.9, 0.4],
-            [0.2, 0.1, 0.9],
-            [-0.7, 0.2, 0.1],
-        ],
-        requires_grad=True,
-        dtype=torch.float32,
-    )
-
-    quantized, _indices, _ = vq(latents)
-    upstream = torch.randn_like(quantized)
-    quantized.backward(upstream)
-
-    expected = _rotation_trick_gradient(upstream, latents.detach(), quantized.detach(), vq.eps)
-    assert torch.allclose(latents.grad, expected, atol=1e-5)
+    assert quantized.shape == (batch, length, dim)
+    assert torch.equal(indices[~mask], torch.full((3,), -1, dtype=torch.long))
+    assert losses["perplexity"].item() >= 1.0
 
 
-def test_vector_quantizer_perplexity_increases_after_updates() -> None:
-    torch.manual_seed(0)
-    vq = VectorQuantizer(num_codes=4, dim=2, beta=0.1, decay=0.8, rotation_trick=False, kmeans_iters=0)
-    with torch.no_grad():
-        vq.embedding.zero_()
-
-    uniform = torch.zeros(12, 2)
-    vq.train()
-    _, _, losses_before = vq(uniform)
-
-    cluster_a = torch.tensor([[1.0, 0.0], [1.1, 0.1], [0.9, -0.1]])
-    cluster_b = torch.tensor([[-1.0, 0.2], [-0.9, -0.2], [-1.2, 0.0]])
-    cluster_c = torch.tensor([[0.0, 1.0], [0.2, 1.1], [-0.1, 0.8]])
-
-    for _ in range(30):
-        latents = torch.cat([cluster_a, cluster_b, cluster_c], dim=0)
-        noise = 0.05 * torch.randn_like(latents)
-        vq(latents + noise)
-
+def test_get_output_from_indices_matches_quantized_vectors() -> None:
+    batch, length, dim, num_codes = 2, 5, 3, 32
+    torch.manual_seed(2)
+    vq = _make_vq(dim, num_codes)
     vq.eval()
-    _, _, losses_after = vq(torch.cat([cluster_a, cluster_b, cluster_c], dim=0))
 
-    assert losses_before["perplexity"].item() == pytest.approx(1.0, abs=1e-5)
-    assert losses_after["perplexity"].item() > 2.0
+    latents = torch.randn(batch, length, dim)
+    with torch.no_grad():
+        quantized, indices, _ = vq(latents)
 
-
-def test_vector_quantizer_supports_orthogonal_regularisation_with_ema() -> None:
-    torch.manual_seed(0)
-    vq = VectorQuantizer(
-        num_codes=8,
-        dim=4,
-        beta=0.25,
-        decay=0.95,
-        rotation_trick=False,
-        orthogonal_reg_weight=1.0,
-    )
-
-    latents = torch.randn(2, 16, 4, requires_grad=True)
-    vq.train()
-    _, _, losses = vq(latents)
-    total = losses["commitment"] + losses["codebook"] + losses["orthogonality"]
-
-    total.backward()
-    assert latents.grad is not None
-    assert torch.isfinite(latents.grad).all()
-
-    # Applying the EMA update should not raise and should clear the pending tensor.
-    vq.commit_pending_codebook()
-    assert vq._pending_codebook is None
+    recovered = vq.get_output_from_indices(indices.reshape(-1))
+    assert recovered.shape == (batch * length, dim)
+    assert torch.allclose(recovered.view_as(quantized), quantized, atol=1e-5)

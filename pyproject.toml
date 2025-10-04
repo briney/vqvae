@@ -17,6 +17,7 @@ dependencies = [
     "torch>=2.3",
     "numpy",
     "einops",
+    "vector-quantize-pytorch==1.23.2",
     "scipy",
     "gemmi",
     "biopython",
