@@ -12,7 +12,7 @@ from gcpvqvae.data.batch import protein_batch_from_graph_dict
 from gcpvqvae.data.dataset import BackboneDataset, collate_backbones
 from gcpvqvae.data.featurize import featurize_backbone
 from gcpvqvae.data.mmcif import PAD_INDEX, load_mmcif
-from gcpvqvae.data.preprocessing import preprocess_dataset
+from gcpvqvae.data.preprocess import preprocess_backbone_dataset as preprocess_dataset
 from gcpvqvae.models.gcpnet import (
     GCPEmbeddingConfig,
     GCPFeedForwardConfig,

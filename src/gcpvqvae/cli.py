@@ -125,10 +125,10 @@ def preprocess_dataset_command(
     if gap_threshold is not None and gap_threshold <= 0:
         raise click.ClickException("--gap-threshold must be positive.")
 
-    from gcpvqvae.data.reference_preprocessing import preprocess_reference_dataset
+    from gcpvqvae.data.preprocess import preprocess_dataset
 
     try:
-        result = preprocess_reference_dataset(
+        result = preprocess_dataset(
             input,
             output,
             max_len=max_len,

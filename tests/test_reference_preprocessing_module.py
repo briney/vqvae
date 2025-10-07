@@ -10,12 +10,12 @@ import h5py
 import numpy as np
 import pytest
 
-from gcpvqvae.data.reference.preprocessing import (
+from gcpvqvae.data.preprocess import (
     PreprocessedChain,
     _validate_length,
     _validate_missing_thresholds,
+    preprocess_dataset,
 )
-from gcpvqvae.data.reference_preprocessing import preprocess_reference_dataset
 
 _EXPECTED_FIXTURE_PATH = (
     Path(__file__).resolve().parent / "test_data" / "reference_h5_expected.py"
@@ -160,7 +160,7 @@ def test_validate_missing_thresholds() -> None:
     assert longest == 16
 
 
-def test_preprocess_reference_dataset_collects_stats(tmp_path: Path) -> None:
+def test_preprocess_dataset_collects_stats(tmp_path: Path) -> None:
     input_dir = tmp_path / "input"
     input_dir.mkdir()
 
@@ -181,7 +181,7 @@ def test_preprocess_reference_dataset_collects_stats(tmp_path: Path) -> None:
     (input_dir / "invalid.cif").write_text("not a cif", encoding="utf-8")
 
     output_dir = tmp_path / "output"
-    manifest_path, stats = preprocess_reference_dataset(
+    manifest_path, stats = preprocess_dataset(
         input_dir,
         output_dir,
         max_len=90,
@@ -224,13 +224,13 @@ def test_preprocess_reference_dataset_collects_stats(tmp_path: Path) -> None:
     assert stats["h5_processed"] == 1
 
 
-def test_preprocess_reference_dataset_h5_matches_fixture(tmp_path: Path) -> None:
+def test_preprocess_dataset_h5_matches_fixture(tmp_path: Path) -> None:
     input_dir = tmp_path / "input"
     input_dir.mkdir()
     _write_structure(input_dir / "valid.cif", num_residues=5)
 
     output_dir = tmp_path / "output"
-    manifest_path, _ = preprocess_reference_dataset(
+    manifest_path, _ = preprocess_dataset(
         input_dir,
         output_dir,
         use_cif=True,
@@ -243,7 +243,7 @@ def test_preprocess_reference_dataset_h5_matches_fixture(tmp_path: Path) -> None
     _assert_h5_matches_expected(h5_path, VALID_CHAIN_A)
 
 
-def test_preprocess_reference_dataset_h5_preserves_nans(tmp_path: Path) -> None:
+def test_preprocess_dataset_h5_preserves_nans(tmp_path: Path) -> None:
     input_dir = tmp_path / "input"
     input_dir.mkdir()
     _write_structure(
@@ -253,7 +253,7 @@ def test_preprocess_reference_dataset_h5_preserves_nans(tmp_path: Path) -> None:
     )
 
     output_dir = tmp_path / "output"
-    manifest_path, _ = preprocess_reference_dataset(
+    manifest_path, _ = preprocess_dataset(
         input_dir,
         output_dir,
         use_cif=True,
@@ -267,13 +267,13 @@ def test_preprocess_reference_dataset_h5_preserves_nans(tmp_path: Path) -> None:
     _assert_h5_matches_expected(h5_path, MISSING_CHAIN_A)
 
 
-def test_preprocess_reference_dataset_omits_index_when_requested(tmp_path: Path) -> None:
+def test_preprocess_dataset_omits_index_when_requested(tmp_path: Path) -> None:
     input_dir = tmp_path / "input"
     input_dir.mkdir()
     _write_structure(input_dir / "simple.cif", num_residues=4)
 
     output_dir = tmp_path / "output"
-    manifest_path, stats = preprocess_reference_dataset(
+    manifest_path, stats = preprocess_dataset(
         input_dir,
         output_dir,
         use_cif=True,

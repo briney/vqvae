@@ -58,7 +58,7 @@ def test_preprocess_dataset_invokes_reference_driver(monkeypatch, tmp_path):
         return manifest, Counter({"chains_written": 1, "h5_processed": 1})
 
     monkeypatch.setattr(
-        "gcpvqvae.data.reference_preprocessing.preprocess_reference_dataset",
+        "gcpvqvae.data.preprocess.preprocess_dataset",
         fake_driver,
     )
 
