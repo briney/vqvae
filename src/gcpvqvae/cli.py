@@ -83,11 +83,6 @@ def gpcvq() -> None:
     help="Maximum worker processes to use while preprocessing.",
 )
 @click.option(
-    "--use-cif",
-    is_flag=True,
-    help="Treat INPUT as mmCIF data instead of the default PDB parsing.",
-)
-@click.option(
     "--no-file-index",
     is_flag=True,
     help="Skip writing the auxiliary file index alongside OUTPUT.",
@@ -104,7 +99,6 @@ def preprocess_dataset_command(
     max_len: Optional[int],
     min_len: Optional[int],
     max_workers: Optional[int],
-    use_cif: bool,
     no_file_index: bool,
     gap_threshold: Optional[float],
 ) -> None:
@@ -134,7 +128,6 @@ def preprocess_dataset_command(
             max_len=max_len,
             min_len=min_len,
             max_workers=max_workers,
-            use_cif=use_cif,
             file_index=not no_file_index,
             gap_threshold=gap_threshold,
         )

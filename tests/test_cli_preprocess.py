@@ -18,7 +18,6 @@ def test_preprocess_dataset_help_lists_reference_options():
         "--max-len",
         "--min-len",
         "--max-workers",
-        "--use-cif",
         "--no-file-index",
         "--gap-threshold",
     ):
@@ -39,7 +38,6 @@ def test_preprocess_dataset_invokes_reference_driver(monkeypatch, tmp_path):
         max_len,
         min_len,
         max_workers,
-        use_cif,
         file_index,
         gap_threshold,
     ):
@@ -48,7 +46,6 @@ def test_preprocess_dataset_invokes_reference_driver(monkeypatch, tmp_path):
             "max_len": max_len,
             "min_len": min_len,
             "max_workers": max_workers,
-            "use_cif": use_cif,
             "file_index": file_index,
             "gap_threshold": gap_threshold,
         }
@@ -75,7 +72,6 @@ def test_preprocess_dataset_invokes_reference_driver(monkeypatch, tmp_path):
             "64",
             "--max-workers",
             "8",
-            "--use-cif",
             "--no-file-index",
             "--gap-threshold",
             "1.5",
@@ -88,7 +84,6 @@ def test_preprocess_dataset_invokes_reference_driver(monkeypatch, tmp_path):
         "max_len": 512,
         "min_len": 64,
         "max_workers": 8,
-        "use_cif": True,
         "file_index": False,
         "gap_threshold": 1.5,
     }
