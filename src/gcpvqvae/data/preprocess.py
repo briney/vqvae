@@ -605,14 +605,14 @@ def preprocess_dataset(
 ):
     """Preprocess AlphaFold-style structures into backbone summaries."""
 
-    print(f"Discovering structure files under {input_root.resolve()}...", flush=True)
+    print(f"\nSearching for structure files in {input_root.resolve()}...", flush=True)
     files = _discover_structure_files(input_root, use_cif=use_cif)
     print(
-        f"Discovered {len(files)} structure files under {input_root.resolve()}.",
+        f"  found {len(files)} structure files.",
         flush=True,
     )
     if not files:
-        raise ValueError(f"No structure files found under {input_root.resolve()}")
+        raise ValueError(f"No structure files found in {input_root.resolve()}")
 
     if output_dir.exists() and not output_dir.is_dir():
         raise NotADirectoryError(f"{output_dir.resolve()} is not a directory")
