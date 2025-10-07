@@ -18,13 +18,12 @@ import torch
 from tqdm import tqdm
 
 from gcpvqvae.data.dataset import (
-    BackboneDataset,
     PREPROCESSED_MANIFEST,
     PREPROCESSED_SAMPLES_DIR,
     PREPROCESSED_VERSION,
+    BackboneDataset,
 )
 from gcpvqvae.data.mmcif import THREE_TO_ONE
-
 
 _BACKBONE_ATOMS: Tuple[str, ...] = ("N", "CA", "C", "O")
 _MANIFEST_NAME = "preprocessed_reference_dataset.json"
@@ -244,7 +243,9 @@ def preprocess_chain(
         gap = _gap_length(prev_seqid, seqid)
         if _should_insert_gap(gap, prev_ca, ca_position, gap_threshold):
             for _ in range(gap):
-                coords_rows.append(np.full((len(_BACKBONE_ATOMS), 3), np.nan, dtype=np.float64))
+                coords_rows.append(
+                    np.full((len(_BACKBONE_ATOMS), 3), np.nan, dtype=np.float64)
+                )
                 plddt_values.append(math.nan)
                 seq_chars.append("X")
             missing_residues += gap
@@ -332,7 +333,9 @@ def _sanitise_chain_id(chain_id: str) -> str:
     return safe.replace("/", "_").replace(" ", "_")
 
 
-def _write_h5(record: _ChainRecord, *, output_dir: Path, include_index: bool, index: int) -> Path:
+def _write_h5(
+    record: _ChainRecord, *, output_dir: Path, include_index: bool, index: int
+) -> Path:
     stem = _structure_stem(Path(record.source_path))
     chain_id = _sanitise_chain_id(record.chain_id)
     if include_index:
@@ -381,7 +384,9 @@ def _discover_structure_files(input_root: Path, *, use_cif: bool) -> List[Path]:
 
 
 def _is_polymer_chain(chain: gemmi.Chain) -> bool:
-    residues = [res for res in chain.get_polymer() if THREE_TO_ONE.get(res.name.upper())]
+    residues = [
+        res for res in chain.get_polymer() if THREE_TO_ONE.get(res.name.upper())
+    ]
     return bool(residues)
 
 
@@ -431,7 +436,9 @@ def _process_structure_file(
             stats[length_reason] += 1  # type: ignore[index]
             continue
 
-        missing_ok, missing_reason, ratio, longest = _validate_missing_thresholds(processed)
+        missing_ok, missing_reason, ratio, longest = _validate_missing_thresholds(
+            processed
+        )
         if not missing_ok:
             stats[missing_reason] += 1  # type: ignore[index]
             continue
@@ -598,17 +605,17 @@ def preprocess_dataset(
 ):
     """Preprocess AlphaFold-style structures into backbone summaries."""
 
-    print(f"Discovering structure files under {input_root}...", flush=True)
+    print(f"Discovering structure files under {input_root.resolve()}...", flush=True)
     files = _discover_structure_files(input_root, use_cif=use_cif)
     print(
-        f"Discovered {len(files)} structure files under {input_root}.",
+        f"Discovered {len(files)} structure files under {input_root.resolve()}.",
         flush=True,
     )
     if not files:
-        raise ValueError(f"No structure files found under {input_root}")
+        raise ValueError(f"No structure files found under {input_root.resolve()}")
 
     if output_dir.exists() and not output_dir.is_dir():
-        raise NotADirectoryError(f"{output_dir} is not a directory")
+        raise NotADirectoryError(f"{output_dir.resolve()} is not a directory")
     output_dir.mkdir(parents=True, exist_ok=True)
 
     entries: List[_ChainRecord] = []
@@ -644,7 +651,9 @@ def preprocess_dataset(
                 )
                 for file_path in files
             ]
-            with tqdm(total=len(futures), desc="Processing files", unit="file") as progress:
+            with tqdm(
+                total=len(futures), desc="Processing files", unit="file"
+            ) as progress:
                 for future in as_completed(futures):
                     file_entries, file_stats = future.result()
                     entries.extend(file_entries)
@@ -678,4 +687,3 @@ __all__ = [
     "preprocess_dataset",
     "preprocess_backbone_dataset",
 ]
-
