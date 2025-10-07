@@ -4,7 +4,7 @@ import gemmi
 import yaml
 
 from gcpvqvae.data.dataset import BackboneDataset
-from gcpvqvae.data.preprocessing import preprocess_dataset
+from gcpvqvae.data.preprocess import preprocess_backbone_dataset as preprocess_dataset
 from gcpvqvae.system.train import Trainer, train
 
 

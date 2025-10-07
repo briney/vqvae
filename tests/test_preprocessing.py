@@ -8,7 +8,7 @@ from gcpvqvae.data.dataset import (
     BackboneDataset,
     PREPROCESSED_MANIFEST,
 )
-from gcpvqvae.data.preprocessing import preprocess_dataset
+from gcpvqvae.data.preprocess import preprocess_backbone_dataset as preprocess_dataset
 
 
 def _make_dataset(path: Path) -> None:

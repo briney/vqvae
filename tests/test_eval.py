@@ -11,7 +11,7 @@ from torch.utils.data import Dataset
 import yaml
 import pytest
 
-from gcpvqvae.data.preprocessing import preprocess_dataset
+from gcpvqvae.data.preprocess import preprocess_backbone_dataset as preprocess_dataset
 from gcpvqvae.system import eval as eval_module
 
 
