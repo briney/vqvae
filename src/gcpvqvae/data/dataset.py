@@ -9,6 +9,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
+import torch.multiprocessing as mp
 from torch.utils.data import Dataset
 
 from .featurize import featurize_backbone
@@ -30,6 +31,11 @@ try:  # pragma: no cover - tqdm is optional at runtime
     from tqdm.auto import tqdm
 except Exception:  # pragma: no cover - tqdm is optional
     tqdm = None
+
+try:  # pragma: no cover - handle locked-memory constrained environments
+    mp.set_sharing_strategy("file_system")
+except RuntimeError:
+    pass
 
 
 def _load_records_for_dataset(args: Tuple[str, int, Optional[Sequence[str]]]) -> List[BackboneRecord]:
