@@ -65,9 +65,10 @@ Additional top-level options control auxiliary behaviour:
 - `use_gcp_dropout` (`True`): selects coupled scalar/vector dropout; disable to fall back to independent dropout.
 - `norm_pos_diff` (`False`): toggles normalisation of positional differences.
 - `init` (`"random"`), `init_checkpoint` (`null`), `strict_init` (`True`): checkpoint initialisation controls.  The packaged
-  training configurations default to `init: "pretrained"` with
-  `init_checkpoint: "models/checkpoints/gcpnet/structure_denoising/ca_bb/last.ckpt"`; override
-  these fields to fall back to random initialisation or to use a custom encoder checkpoint.
+  training configurations default to `init: "pretrained"` and rely on the runtime
+  to resolve the bundled checkpoint relative to the model definition when
+  `init_checkpoint` is left as `null`.  Override these fields to fall back to
+  random initialisation or to use a custom encoder checkpoint.
 
 ### `model.adapter` – Latent projection (`LatentAdapterConfig`)
 

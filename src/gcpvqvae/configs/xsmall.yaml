@@ -40,7 +40,7 @@ model:
     use_gcp_dropout: true
     norm_pos_diff: false
     init: pretrained            # set to "random" to disable checkpoint initialisation
-    init_checkpoint: "models/checkpoints/gcpnet/structure_denoising/ca_bb/last.ckpt"
+    init_checkpoint: null
     strict_init: false
   adapter:
     enabled: true
