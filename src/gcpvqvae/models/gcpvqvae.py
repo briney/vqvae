@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass, field
+from importlib.resources import as_file, files
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional, Tuple
 
@@ -211,6 +212,19 @@ class GCPVQVAE(nn.Module):
 
     @staticmethod
     def _default_gcp_checkpoint_path() -> Optional[Path]:
+        try:
+            resource = files("gcpvqvae") / "models" / "checkpoints" / "gcpnet" / "structure_denoising" / "ca_bb" / "last.ckpt"
+        except ModuleNotFoundError:
+            resource = None
+
+        if resource is not None:
+            try:
+                with as_file(resource) as checkpoint_path:
+                    if checkpoint_path.is_file():
+                        return checkpoint_path
+            except FileNotFoundError:
+                pass
+
         base_dir = Path(__file__).resolve()
         try:
             project_root = base_dir.parents[3]
