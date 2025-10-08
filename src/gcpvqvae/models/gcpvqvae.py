@@ -202,19 +202,18 @@ class GCPVQVAE(nn.Module):
                 "Checkpoint does not contain compatible GCPNet parameters for the current configuration"
             )
 
-        # missing, unexpected = self.encoder_gcp.load_state_dict(
-        #     coerced, strict=getattr(self.config.gcp, "strict_init", True)
-        # )
-        # if missing or unexpected:
-        #     warnings.warn(
-        #         "Loaded GCPNet weights with missing keys %s and unexpected keys %s"
-        #         % (missing, unexpected),
-        #         UserWarning,
-        #     )
+        strict = getattr(self.config.gcp, "strict_init", True)
+        missing, unexpected = self.encoder_gcp.load_state_dict(coerced, strict=strict)
+        if (missing or unexpected) and not strict:
+            warnings.warn(
+                "Loaded GCPNet weights with missing keys %s and unexpected keys %s"
+                % (missing, unexpected),
+                UserWarning,
+            )
 
     @staticmethod
     def _default_gcp_checkpoint_path() -> Optional[Path]:
-        ckpt_path = (
+        resource = (
             files("gcpvqvae")
             / "models"
             / "checkpoints"
@@ -223,40 +222,47 @@ class GCPVQVAE(nn.Module):
             / "ca_bb"
             / "last.ckpt"
         )
-        if ckpt_path.is_file():
-            return ckpt_path
-        raise FileNotFoundError(f"GCPNet checkpoint file not found at {ckpt_path}")
 
-        # base_dir = Path(__file__).resolve()
-        # model_root = base_dir.parent
-        # ckpt_path = (
-        #     model_root
-        #     / "checkpoints"
-        #     / "gcpnet"
-        #     / "structure_denoising"
-        #     / "ca_bb"
-        #     / "last.ckpt"
-        # )
-        # if ckpt_path.is_file():
-        #     return ckpt_path
-        # raise FileNotFoundError(f"GCPNet checkpoint file not found at {ckpt_path}")
+        candidates = []
+        try:
+            candidates.append(Path(resource))
+        except TypeError:
+            pass
 
-        # base_dir = Path(__file__).resolve()
-        # try:
-        #     project_root = base_dir.parents[3]
-        # except IndexError:
-        #     return None
+        base_dir = Path(__file__).resolve()
+        candidates.append(
+            base_dir.parent
+            / "checkpoints"
+            / "gcpnet"
+            / "structure_denoising"
+            / "ca_bb"
+            / "last.ckpt"
+        )
 
-        # checkpoint = (
-        #     project_root
-        #     / "models"
-        #     / "checkpoints"
-        #     / "gcpnet"
-        #     / "structure_denoising"
-        #     / "ca_bb"
-        #     / "last.ckpt"
-        # )
-        # return checkpoint
+        try:
+            project_root = base_dir.parents[3]
+        except IndexError:
+            project_root = None
+        if project_root is not None:
+            candidates.append(
+                project_root
+                / "models"
+                / "checkpoints"
+                / "gcpnet"
+                / "structure_denoising"
+                / "ca_bb"
+                / "last.ckpt"
+            )
+
+        for candidate in candidates:
+            if candidate is not None and candidate.is_file():
+                return candidate
+
+        searched = ", ".join(str(path) for path in candidates if path is not None)
+        raise FileNotFoundError(
+            "GCPNet checkpoint file not found in any known location. "
+            f"Searched: {searched}"
+        )
 
     @staticmethod
     def _extract_gcp_state_dict(
