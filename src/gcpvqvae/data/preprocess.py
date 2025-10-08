@@ -26,7 +26,7 @@ from gcpvqvae.data.dataset import (
 from gcpvqvae.data.mmcif import THREE_TO_ONE
 
 _BACKBONE_ATOMS: Tuple[str, ...] = ("N", "CA", "C", "O")
-_MANIFEST_NAME = "preprocessed_reference_dataset.json"
+_MANIFEST_NAME = "preprocessed_dataset.json"
 _FILE_INDEX_NAME = "file_index.json"
 
 # Missing-data thresholds applied during preprocessing.  AlphaFold structures
