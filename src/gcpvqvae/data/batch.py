@@ -208,10 +208,12 @@ class ProteinBatch(_PyGBatch):
             **extras,
         )
 
-        if self.centroids is not None:
-            out.centroids = self.centroids.to(**kwargs)
-        if self.edge_frames is not None:
-            out.edge_frames = self.edge_frames.to(**kwargs)
+        centroids = getattr(self, "centroids", None)
+        if centroids is not None:
+            out.centroids = centroids.to(**kwargs)
+        edge_frames = getattr(self, "edge_frames", None)
+        if edge_frames is not None:
+            out.edge_frames = edge_frames.to(**kwargs)
 
         return out
 

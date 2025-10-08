@@ -74,6 +74,37 @@ def test_gcpnet_encoder_projects_edge_scalars_with_default_input_dim() -> None:
     assert output["graph_embedding"].shape == (proto.num_graphs(), node_dim)
 
 
+def test_protein_batch_to_handles_missing_optional_attrs() -> None:
+    num_nodes = 3
+    node_scalars = torch.randn(num_nodes, 4)
+    node_vectors = torch.randn(num_nodes, 2, 3)
+    edge_index = torch.tensor([[0, 1], [1, 2]], dtype=torch.long)
+    edge_scalars = torch.randn(edge_index.shape[1], 4)
+    edge_vectors = torch.randn(edge_index.shape[1], 2, 3)
+    edge_frames = torch.eye(3).expand(edge_index.shape[1], 3, 3).clone()
+
+    batch = ProteinBatch(
+        h=node_scalars,
+        chi=node_vectors,
+        e={
+            "knn_k": EdgeStorage(
+                edge_index=edge_index,
+                scalars=edge_scalars,
+                vectors=edge_vectors,
+                frames=edge_frames,
+                batch=torch.zeros(edge_index.shape[1], dtype=torch.long),
+            )
+        },
+        xi=torch.randn(num_nodes, 3),
+        batch=torch.zeros(num_nodes, dtype=torch.long),
+        ptr=torch.tensor([0, num_nodes], dtype=torch.long),
+        mask=torch.ones(num_nodes, dtype=torch.bool),
+    )
+
+    moved = batch.to(device=torch.device("cpu"))
+    assert isinstance(moved, ProteinBatch)
+
+
 def test_prepare_model_config_defaults_edge_scalar_input_dim() -> None:
     config = _prepare_model_config({"gcp": {"edge_scalar_dim": 32}})
 

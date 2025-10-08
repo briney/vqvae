@@ -113,6 +113,7 @@ This document summarises the automated tests that exercise the GCP-VQVAE codebas
 - `test_gcpnet_encoder_supports_bfloat16_inputs` – Checks the full encoder supports bfloat16 features and preserves data types in its outputs. ([source](test_gcpnet.py#L128-L177))
 - `test_gcpnet_reference_checkpoint_loads` – Validates that the packaged GCP checkpoint contains usable weights that load into a fresh encoder instance. ([source](test_gcpnet.py#L180-L206))
 - `test_packaged_configs_initialize_gcpnet_from_pretrained_weights` – Confirms packaged model configurations can map pretrained weights onto the encoder. ([source](test_gcpnet.py#L209-L235))
+- `test_protein_batch_to_handles_missing_optional_attrs` – Guards against regressions when optional attributes (e.g. `centroids`) are unset prior to calling `.to(...)`. ([source](test_gcpnet.py#L99-L126))
 
 ### `tests/test_eval.py`
 - `test_evaluate_reports_summary` – Mocks the evaluation pipeline to ensure evaluation summarises dataset statistics, codebook usage, and structural metrics. ([source](test_eval.py#L86-L153))
