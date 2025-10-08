@@ -5,6 +5,7 @@ data:
   root: "tests/test_data/cif_50"
   k: 4
   num_dataloader_workers: 0
+  num_parsing_workers: null
   cache: true
 
 model:

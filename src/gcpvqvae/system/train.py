@@ -66,6 +66,7 @@ class DataConfig:
     num_dataloader_workers: int = 0
     cache: bool = True
     show_progress: bool = True
+    num_parsing_workers: Optional[int] = None
 
 
 @dataclass
@@ -141,6 +142,7 @@ class EvalDuringTrainingConfig:
     gdt_ts: bool = False
     histogram_bins: int = 20
     quantiles: Tuple[float, ...] = (0.05, 0.5, 0.95)
+    num_parsing_workers: Optional[int] = None
 
 
 @dataclass
@@ -421,6 +423,12 @@ def _prepare_eval_during_training_config(
     show_progress = (
         bool(show_progress_raw) if show_progress_raw is not None else None
     )
+    parsing_workers_raw = raw.get("num_parsing_workers")
+    parsing_workers = (
+        int(parsing_workers_raw)
+        if parsing_workers_raw is not None
+        else None
+    )
 
     return EvalDuringTrainingConfig(
         interval=interval,
@@ -436,6 +444,7 @@ def _prepare_eval_during_training_config(
         gdt_ts=bool(raw.get("gdt_ts", False)),
         histogram_bins=histogram_bins,
         quantiles=quantiles,
+        num_parsing_workers=parsing_workers,
     )
 
 
@@ -518,6 +527,12 @@ def _prepare_data_config(raw: Dict[str, Any]) -> DataConfig:
     show_progress_raw = raw.get("show_progress")
     if show_progress_raw is None and "progress" in raw:
         show_progress_raw = raw.get("progress")
+    num_parsing_workers_raw = raw.get("num_parsing_workers")
+    num_parsing_workers = (
+        int(num_parsing_workers_raw)
+        if num_parsing_workers_raw is not None
+        else None
+    )
     return DataConfig(
         root=str(root),
         chain_ids=raw.get("chain_ids"),
@@ -525,6 +540,7 @@ def _prepare_data_config(raw: Dict[str, Any]) -> DataConfig:
         num_dataloader_workers=num_dataloader_workers,
         cache=bool(raw.get("cache", True)),
         show_progress=bool(show_progress_raw if show_progress_raw is not None else True),
+        num_parsing_workers=num_parsing_workers,
     )
 
 
@@ -900,6 +916,7 @@ class Trainer:
             k=self.data_cfg.k,
             cache=self.data_cfg.cache,
             progress=self.data_cfg.show_progress,
+            num_parsing_workers=self.data_cfg.num_parsing_workers,
         )
         loader = DataLoader(
             dataset,
@@ -936,6 +953,11 @@ class Trainer:
                 self.eval_cfg.show_progress
                 if self.eval_cfg.show_progress is not None
                 else self.data_cfg.show_progress
+            ),
+            num_parsing_workers=(
+                self.eval_cfg.num_parsing_workers
+                if self.eval_cfg.num_parsing_workers is not None
+                else self.data_cfg.num_parsing_workers
             ),
         )
         if len(dataset) == 0:

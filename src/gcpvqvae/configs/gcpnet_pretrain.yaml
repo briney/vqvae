@@ -5,6 +5,7 @@ data:
   length_cap: 512
   k: 16
   num_dataloader_workers: 4
+  num_parsing_workers: null
   cache: true
   show_progress: true
 

@@ -33,6 +33,7 @@ class EvalDataConfig:
     num_dataloader_workers: int = 0
     cache: bool = True
     show_progress: bool = True
+    num_parsing_workers: Optional[int] = None
 
 
 @dataclass
@@ -79,6 +80,9 @@ def _prepare_data_config(raw: Dict[str, Any]) -> EvalDataConfig:
     if chain_ids is not None and not isinstance(chain_ids, Sequence):
         raise ValueError("data.chain_ids must be a sequence of chain identifiers")
 
+    parsing_workers = raw.get("num_parsing_workers")
+    num_parsing_workers = int(parsing_workers) if parsing_workers is not None else None
+
     return EvalDataConfig(
         root=str(raw["root"]),
         chain_ids=tuple(chain_ids) if chain_ids is not None else None,
@@ -89,6 +93,7 @@ def _prepare_data_config(raw: Dict[str, Any]) -> EvalDataConfig:
         ),
         cache=bool(raw.get("cache", True)),
         show_progress=bool(raw.get("show_progress", raw.get("progress", True))),
+        num_parsing_workers=num_parsing_workers,
     )
 
 
@@ -248,6 +253,7 @@ class Evaluator:
             k=self.data_cfg.k,
             cache=self.data_cfg.cache,
             progress=self.data_cfg.show_progress,
+            num_parsing_workers=self.data_cfg.num_parsing_workers,
         )
         if len(dataset) == 0:
             raise ValueError("Evaluation dataset is empty")

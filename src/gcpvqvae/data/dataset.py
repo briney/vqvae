@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -18,6 +19,12 @@ Tensor = torch.Tensor
 PREPROCESSED_MANIFEST = "preprocessed_dataset.json"
 PREPROCESSED_SAMPLES_DIR = "samples"
 PREPROCESSED_VERSION = 1
+
+try:
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+except ImportError:  # pragma: no cover - fallback when futures missing
+    ProcessPoolExecutor = None  # type: ignore[assignment]
+    as_completed = None  # type: ignore[assignment]
 
 try:  # pragma: no cover - tqdm is optional at runtime
     from tqdm.auto import tqdm
@@ -201,6 +208,7 @@ class BackboneDataset(Dataset):
         k: int = 16,
         cache: bool = True,
         progress: bool = True,
+        num_parsing_workers: Optional[int] = None,
     ) -> None:
         """Parse backbone files and optionally load cached features.
 
@@ -215,6 +223,10 @@ class BackboneDataset(Dataset):
             cache: Whether to memoize loaded records or preprocessed samples in
                 memory.
             progress: Show a CLI progress bar when parsing raw structure files.
+            num_parsing_workers: Optional number of worker processes used while
+                reading structure files. ``None`` defaults to ``ProcessPoolExecutor``'s
+                behaviour (typically the number of CPUs). Values ``<= 1`` fall back to
+                sequential parsing.
 
         Raises:
             FileNotFoundError: If ``root`` does not exist.
@@ -235,6 +247,14 @@ class BackboneDataset(Dataset):
         self._preprocessed_formats: List[str] = []
         self._preprocessed_metadata: List[Dict[str, Any]] = []
         self._source_length_cap: Optional[int] = None
+        env_force_sequential = os.environ.get("GCPVQVAE_FORCE_SEQUENTIAL_LOAD")
+        if env_force_sequential:
+            self.num_parsing_workers = 1
+        else:
+            if num_parsing_workers is None or num_parsing_workers <= 0:
+                self.num_parsing_workers = None
+            else:
+                self.num_parsing_workers = int(num_parsing_workers)
 
         if self.root.is_dir():
             manifest_path = self.root / PREPROCESSED_MANIFEST
@@ -259,11 +279,32 @@ class BackboneDataset(Dataset):
             chain_filter = None
 
         try:
-            for file in files:
-                records = _load_records_for_dataset((str(file), length_cap, chain_filter))
-                self._store_records(records)
-                if progress_bar is not None:
-                    progress_bar.update(1)
+            worker_count = self.num_parsing_workers
+            use_parallel = (
+                ProcessPoolExecutor is not None
+                and as_completed is not None
+                and (worker_count is None or worker_count > 1)
+            )
+            if use_parallel:
+                with ProcessPoolExecutor(max_workers=worker_count) as executor:
+                    futures = {
+                        executor.submit(
+                            _load_records_for_dataset,
+                            (str(file), length_cap, chain_filter),
+                        ): file
+                        for file in files
+                    }
+                    for future in as_completed(futures):
+                        records = future.result()
+                        self._store_records(records)
+                        if progress_bar is not None:
+                            progress_bar.update(1)
+            else:
+                for file in files:
+                    records = _load_records_for_dataset((str(file), length_cap, chain_filter))
+                    self._store_records(records)
+                    if progress_bar is not None:
+                        progress_bar.update(1)
         finally:
             if progress_bar is not None:
                 progress_bar.close()

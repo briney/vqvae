@@ -34,6 +34,12 @@ This document summarises the automated tests that exercise the GCP-VQVAE codebas
 ### `tests/test_preprocessing.py`
 - `test_preprocess_dataset_roundtrip` – Runs the high-level preprocessing pipeline end-to-end, comparing manifest metadata and processed samples against raw inputs. ([source](test_preprocessing.py#L41-L121))
 
+### `tests/test_dataset_parallel.py`
+- `test_backbone_dataset_parallel_loading` – Ensures the multiprocessing loader in `BackboneDataset` returns the same samples as sequential parsing when workers > 1. ([source](test_dataset_parallel.py#L11-L30))
+- `test_prepare_data_config_records_parsing_workers` – Verifies the training data parser captures `num_parsing_workers` from configuration. ([source](test_dataset_parallel.py#L33-L39))
+- `test_prepare_eval_config_records_parsing_workers` – Asserts evaluation data config accepts the new parsing worker option. ([source](test_dataset_parallel.py#L42-L48))
+- `test_prepare_eval_during_training_config_records_parsing_workers` – Confirms on-training evaluation config propagates the worker count. ([source](test_dataset_parallel.py#L51-L55))
+
 ### `tests/test_reference_preprocessing_module.py`
 - `test_validate_length_bounds` – Evaluates length validation helper thresholds for preprocessed chains. ([source](test_reference_preprocessing_module.py#L118-L139))
 - `test_validate_missing_thresholds` – Confirms missing-residue heuristics detect excessive gaps and runs. ([source](test_reference_preprocessing_module.py#L142-L167))

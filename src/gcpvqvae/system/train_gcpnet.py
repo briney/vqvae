@@ -42,6 +42,7 @@ class PretrainDataConfig:
     num_dataloader_workers: int = 0
     cache: bool = True
     show_progress: bool = True
+    num_parsing_workers: Optional[int] = None
 
 
 @dataclass
@@ -130,6 +131,13 @@ def _prepare_data_config(raw: Mapping[str, Any]) -> PretrainDataConfig:
     else:
         raise TypeError("data.chain_ids must be a sequence of strings or null")
 
+    num_parsing_workers_raw = raw.get("num_parsing_workers")
+    num_parsing_workers = (
+        int(num_parsing_workers_raw)
+        if num_parsing_workers_raw is not None
+        else None
+    )
+
     return PretrainDataConfig(
         root=str(raw["root"]),
         chain_ids=chain_ids,
@@ -138,6 +146,7 @@ def _prepare_data_config(raw: Mapping[str, Any]) -> PretrainDataConfig:
         num_dataloader_workers=int(raw.get("num_dataloader_workers", 0)),
         cache=bool(raw.get("cache", True)),
         show_progress=bool(raw.get("show_progress", True)),
+        num_parsing_workers=num_parsing_workers,
     )
 
 
@@ -339,6 +348,7 @@ class GCPNetPretrainer:
             k=self.data_cfg.k,
             cache=self.data_cfg.cache,
             progress=self.data_cfg.show_progress,
+            num_parsing_workers=self.data_cfg.num_parsing_workers,
         )
         if len(dataset) == 0:
             raise ValueError("Training dataset is empty")
