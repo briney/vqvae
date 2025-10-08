@@ -202,15 +202,15 @@ class GCPVQVAE(nn.Module):
                 "Checkpoint does not contain compatible GCPNet parameters for the current configuration"
             )
 
-        missing, unexpected = self.encoder_gcp.load_state_dict(
-            coerced, strict=getattr(self.config.gcp, "strict_init", True)
-        )
-        if missing or unexpected:
-            warnings.warn(
-                "Loaded GCPNet weights with missing keys %s and unexpected keys %s"
-                % (missing, unexpected),
-                UserWarning,
-            )
+        # missing, unexpected = self.encoder_gcp.load_state_dict(
+        #     coerced, strict=getattr(self.config.gcp, "strict_init", True)
+        # )
+        # if missing or unexpected:
+        #     warnings.warn(
+        #         "Loaded GCPNet weights with missing keys %s and unexpected keys %s"
+        #         % (missing, unexpected),
+        #         UserWarning,
+        #     )
 
     @staticmethod
     def _default_gcp_checkpoint_path() -> Optional[Path]:
