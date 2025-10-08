@@ -113,7 +113,10 @@ gpcvq train-gpcnet data.root=path/to/backbones
 
 The resulting checkpoints expose a `gcp_state` entry that can be referenced from
 `model.gcp.init` (alongside `model.gcp.init_checkpoint`) in the full training
-configuration to load the encoder weights.
+configuration to load the encoder weights.  When the bundled configurations set
+`model.gcp.init: "pretrained"` but leave `model.gcp.init_checkpoint` unset, the
+trainer resolves the packaged checkpoint relative to the module at runtime, so
+the defaults work regardless of the current working directory.
 
 ### Experiment logging with Weights & Biases
 

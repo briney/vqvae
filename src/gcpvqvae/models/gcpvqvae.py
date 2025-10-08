@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional, Tuple
 
 import numpy as np
@@ -168,9 +169,20 @@ class GCPVQVAE(nn.Module):
 
         checkpoint = getattr(self.config.gcp, "init_checkpoint", None)
         if not checkpoint:
-            raise ValueError(
-                "GCPNet pretrained initialisation requires 'checkpoint' to be set"
-            )
+            default_checkpoint = self._default_gcp_checkpoint_path()
+            if default_checkpoint is None:
+                raise ValueError(
+                    "GCPNet pretrained initialisation requires 'checkpoint' to be set "
+                    "when the packaged default checkpoint cannot be resolved"
+                )
+            if not default_checkpoint.is_file():
+                raise ValueError(
+                    "GCPNet pretrained initialisation requires 'checkpoint' to be set "
+                    f"when the packaged default checkpoint is unavailable at "
+                    f"{default_checkpoint}"
+                )
+            checkpoint = str(default_checkpoint)
+            self.config.gcp.init_checkpoint = checkpoint
 
         state = load_checkpoint(checkpoint, map_location="cpu")
         state_dict = self._extract_gcp_state_dict(state)
@@ -196,6 +208,17 @@ class GCPVQVAE(nn.Module):
                 % (missing, unexpected),
                 UserWarning,
             )
+
+    @staticmethod
+    def _default_gcp_checkpoint_path() -> Optional[Path]:
+        base_dir = Path(__file__).resolve()
+        try:
+            project_root = base_dir.parents[3]
+        except IndexError:
+            return None
+
+        checkpoint = project_root / "models" / "checkpoints" / "gcpnet" / "structure_denoising" / "ca_bb" / "last.ckpt"
+        return checkpoint
 
     @staticmethod
     def _extract_gcp_state_dict(state: Mapping[str, Any]) -> Optional[Dict[str, Tensor]]:
