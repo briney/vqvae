@@ -6,15 +6,24 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+import h5py
+import numpy as np
 import torch
 from torch.utils.data import Dataset
 
 from .featurize import featurize_backbone
-from .mmcif import PAD_INDEX, BackboneRecord, load_mmcif
+from .mmcif import (
+    AA_TO_INDEX,
+    ONE_TO_THREE,
+    PAD_INDEX,
+    BackboneRecord,
+    load_mmcif,
+)
 
 Tensor = torch.Tensor
 
 PREPROCESSED_MANIFEST = "preprocessed_dataset.json"
+PREPROCESSED_REFERENCE_MANIFEST = "preprocessed_reference_dataset.json"
 PREPROCESSED_SAMPLES_DIR = "samples"
 PREPROCESSED_VERSION = 1
 
@@ -148,15 +157,27 @@ class BackboneDataset(Dataset):
         self._keys: List[Tuple[str, str]] = []
         self._preprocessed = False
         self._preprocessed_files: List[Path] = []
+        self._preprocessed_entries: List[Dict[str, Any]] = []
+        self._preprocessed_loader: str = "pt"
         self._source_length_cap: Optional[int] = None
 
-        if self.root.is_dir():
-            manifest_path = self.root / PREPROCESSED_MANIFEST
-            if manifest_path.is_file():
-                self._init_from_preprocessed(manifest_path, chain_ids, length_cap, k)
-                if not self._keys:
-                    raise ValueError("Dataset does not contain any valid backbone chains")
-                return
+        manifest_candidates: List[Path] = []
+        if self.root.is_file() and self.root.name in (
+            PREPROCESSED_MANIFEST,
+            PREPROCESSED_REFERENCE_MANIFEST,
+        ):
+            manifest_candidates.append(self.root)
+        elif self.root.is_dir():
+            for name in (PREPROCESSED_MANIFEST, PREPROCESSED_REFERENCE_MANIFEST):
+                candidate = self.root / name
+                if candidate.is_file():
+                    manifest_candidates.append(candidate)
+
+        for manifest_path in manifest_candidates:
+            self._init_from_preprocessed(manifest_path, chain_ids, length_cap, k)
+            if not self._keys:
+                continue
+            return
 
         files = _discover_files(self.root)
 
@@ -258,67 +279,108 @@ class BackboneDataset(Dataset):
         with manifest_path.open("r", encoding="utf-8") as handle:
             manifest = json.load(handle)
 
-        version = manifest.get("version")
-        if version != PREPROCESSED_VERSION:
-            raise ValueError(
-                f"Unsupported preprocessed dataset version {version!r}; expected {PREPROCESSED_VERSION}"
-            )
-
-        manifest_k = manifest.get("k")
-        if manifest_k is not None and manifest_k != k:
-            raise ValueError(
-                f"Preprocessed dataset was generated with k={manifest_k} "
-                f"but k={k} was requested"
-            )
-
-        entries = manifest.get("entries")
-        if not isinstance(entries, list):
-            raise ValueError("Invalid preprocessed dataset manifest: missing 'entries'")
-
         chain_filter = set(chain_ids) if chain_ids is not None else None
 
-        filtered: List[Dict[str, Any]] = []
-        for entry in entries:
-            if not isinstance(entry, dict):
-                continue
-            chain_id = entry.get("chain_id")
-            file_rel = entry.get("file")
-            if not isinstance(chain_id, str) or not isinstance(file_rel, str):
-                continue
-            if chain_filter is not None and chain_id not in chain_filter:
-                continue
-            filtered.append(entry)
+        entries: List[Dict[str, Any]]
+        manifest_k: Optional[int]
+        if "entries" in manifest:
+            version = manifest.get("version")
+            if version != PREPROCESSED_VERSION:
+                raise ValueError(
+                    f"Unsupported preprocessed dataset version {version!r}; expected {PREPROCESSED_VERSION}"
+                )
 
-        if not filtered:
-            raise ValueError("Dataset does not contain any valid backbone chains")
+            manifest_k = manifest.get("k")
+            if manifest_k is not None and manifest_k != k:
+                raise ValueError(
+                    f"Preprocessed dataset was generated with k={manifest_k} "
+                    f"but k={k} was requested"
+                )
 
-        source_length_cap = manifest.get("length_cap")
-        if isinstance(source_length_cap, int) and source_length_cap > 0:
-            self._source_length_cap = source_length_cap
-        else:
+            entries = manifest.get("entries")
+            if not isinstance(entries, list):
+                raise ValueError("Invalid preprocessed dataset manifest: missing 'entries'")
+
+            filtered: List[Dict[str, Any]] = []
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                chain_id = entry.get("chain_id")
+                file_rel = entry.get("file")
+                if not isinstance(chain_id, str) or not isinstance(file_rel, str):
+                    continue
+                if chain_filter is not None and chain_id not in chain_filter:
+                    continue
+                filtered.append(entry)
+
+            if not filtered:
+                raise ValueError("Dataset does not contain any valid backbone chains")
+
+            source_length_cap = manifest.get("length_cap")
+            if isinstance(source_length_cap, int) and source_length_cap > 0:
+                self._source_length_cap = source_length_cap
+            else:
+                self._source_length_cap = None
+
+            self.k = manifest_k if isinstance(manifest_k, int) and manifest_k > 0 else k
+            entries = filtered
+            loader = "pt"
+        elif "chains" in manifest:
+            chains = manifest.get("chains")
+            if not isinstance(chains, list):
+                raise ValueError("Invalid preprocessed dataset manifest: missing 'chains'")
+
+            filtered = []
+            for entry in chains:
+                if not isinstance(entry, dict):
+                    continue
+                chain_id = entry.get("chain_id")
+                h5_path = entry.get("h5_path")
+                if not isinstance(chain_id, str) or not isinstance(h5_path, str):
+                    continue
+                if chain_filter is not None and chain_id not in chain_filter:
+                    continue
+                filtered.append(entry)
+
+            if not filtered:
+                raise ValueError("Dataset does not contain any valid backbone chains")
+
             self._source_length_cap = None
+            self.k = k
+            entries = filtered
+            loader = "h5"
+        else:
+            raise ValueError("Invalid preprocessed dataset manifest: missing entries list")
 
         self.length_cap = length_cap
         if self._source_length_cap is not None:
             self.length_cap = min(self.length_cap, self._source_length_cap)
-        self.k = manifest_k if isinstance(manifest_k, int) and manifest_k > 0 else k
         self.chain_filter = chain_filter
         self._preprocessed = True
         self._preprocessed_files = []
+        self._preprocessed_entries = []
         self._keys = []
 
-        for entry in filtered:
-            file_rel = entry["file"]
+        for entry in entries:
+            if loader == "pt":
+                file_rel = entry["file"]
+            else:
+                file_rel = entry["h5_path"]
             sample_path = manifest_path.parent / file_rel
             if not sample_path.exists():
                 raise FileNotFoundError(sample_path)
             source_path = entry.get("source_path")
             if not isinstance(source_path, str):
                 source_path = str(sample_path)
-            chain_id = entry["chain_id"]
+            chain_id = entry.get("chain_id")
+            if not isinstance(chain_id, str):
+                raise ValueError("Manifest entry missing chain identifier")
             key = (source_path, chain_id)
             self._keys.append(key)
             self._preprocessed_files.append(sample_path)
+            self._preprocessed_entries.append(entry)
+
+        self._preprocessed_loader = loader
 
     def _get_preprocessed_sample(
         self, index: int, key: Tuple[str, str]
@@ -327,9 +389,13 @@ class BackboneDataset(Dataset):
             cached = self._records[key]
         else:
             sample_path = self._preprocessed_files[index]
-            cached = torch.load(sample_path, map_location="cpu")
-            if not isinstance(cached, dict):
-                raise TypeError(f"Preprocessed sample at {sample_path} is not a mapping")
+            entry = self._preprocessed_entries[index]
+            if sample_path.suffix == ".h5" or self._preprocessed_loader == "h5":
+                cached = _load_h5_sample(sample_path, entry, k=self.k)
+            else:
+                cached = torch.load(sample_path, map_location="cpu")
+                if not isinstance(cached, dict):
+                    raise TypeError(f"Preprocessed sample at {sample_path} is not a mapping")
             if self._cache_enabled:
                 self._records[key] = cached
 
@@ -444,3 +510,124 @@ __all__ = [
     "PREPROCESSED_SAMPLES_DIR",
     "PREPROCESSED_VERSION",
 ]
+def _decode_h5_sequence(value: Any) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8")
+    if isinstance(value, np.ndarray):
+        if value.dtype.kind in {"S", "V"}:
+            return value.tobytes().decode("utf-8").rstrip("\x00")
+        if value.dtype.kind == "U":
+            return "".join(value.tolist())
+        if value.shape == ():
+            return str(value.item())
+    if isinstance(value, str):
+        return value
+    raise TypeError(f"Unable to decode sequence from HDF5 payload of type {type(value)!r}")
+
+
+def _normalise_backbone_coords(coords: torch.Tensor, ca_mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    coords = coords.clone()
+    dtype = coords.dtype
+    device = coords.device
+    if coords.numel() == 0:
+        rotation = torch.eye(3, dtype=dtype, device=device)
+        translation = torch.zeros(3, dtype=dtype, device=device)
+        return coords, rotation, translation
+
+    if ca_mask.any():
+        centroid = coords[ca_mask, 1, :].mean(dim=0)
+    else:
+        centroid = coords[:, 1, :].mean(dim=0)
+
+    coords = coords - centroid.view(1, 1, 3)
+    rotation = torch.eye(3, dtype=dtype, device=device)
+    translation = centroid
+    return coords, rotation, translation
+
+
+def _load_h5_sample(
+    sample_path: Path,
+    entry: Dict[str, Any],
+    *,
+    k: int,
+) -> Dict[str, Any]:
+    with h5py.File(sample_path, "r") as handle:
+        coords_raw = np.asarray(handle["N_CA_C_O_coord"])  # (L, 4, 3)
+        seq_value = handle["seq"][()]
+        plddt = np.asarray(handle.get("plddt_scores")) if "plddt_scores" in handle else None
+
+    seq_str = _decode_h5_sequence(seq_value)
+    nca_coords = coords_raw[:, :3, :]
+    atom_present = ~np.isnan(nca_coords)
+    coords_clean = np.where(atom_present, nca_coords, 0.0)
+    atom_mask = atom_present.all(axis=2)
+    residue_mask = atom_mask.all(axis=1)
+    nan_mask = np.isnan(nca_coords[:, 1, :]).any(axis=1)
+
+    coords_tensor = torch.from_numpy(coords_clean.astype(np.float32, copy=False))
+    atom_mask_tensor = torch.from_numpy(atom_mask)
+    mask_tensor = torch.from_numpy(residue_mask)
+    nan_mask_tensor = torch.from_numpy(nan_mask)
+
+    coords_tensor, rotation, translation = _normalise_backbone_coords(
+        coords_tensor, atom_mask_tensor[:, 1]
+    )
+
+    seq_indices = [AA_TO_INDEX.get(residue, AA_TO_INDEX["X"]) for residue in seq_str]
+    seq_tensor = torch.tensor(seq_indices, dtype=torch.long)
+
+    residue_names = [ONE_TO_THREE.get(residue, "UNK") for residue in seq_str]
+    residue_ids = [(idx + 1, " ") for idx in range(len(seq_str))]
+
+    source_path = entry.get("source_path") or str(sample_path)
+    chain_id = entry.get("chain_id") or "?"
+
+    record = BackboneRecord(
+        path=str(source_path),
+        chain_id=str(chain_id),
+        coords=coords_tensor,
+        mask=mask_tensor,
+        atom_mask=atom_mask_tensor,
+        seq=seq_tensor,
+        seq_string=seq_str,
+        residue_names=residue_names,
+        residue_ids=residue_ids,
+        rotation=rotation,
+        translation=translation,
+        nan_mask=nan_mask_tensor,
+    )
+
+    features = featurize_backbone(record, k=k)
+
+    metadata: Dict[str, Any] = {
+        "path": record.path,
+        "chain_id": record.chain_id,
+        "sequence": seq_str,
+        "residue_ids": residue_ids,
+        "residue_names": residue_names,
+    }
+    if plddt is not None:
+        metadata["plddt_scores"] = plddt.tolist()
+
+    sample: Dict[str, Any] = {
+        "coords": record.coords.clone(),
+        "mask": record.mask.clone(),
+        "atom_mask": record.atom_mask.clone(),
+        "seq": record.seq.clone(),
+        "seq_str": record.seq_string,
+        "nan_mask": record.nan_mask.clone(),
+        "node_scalars": features["node_scalars"],
+        "node_vectors": features["node_vectors"],
+        "backbone_vectors": features["backbone_vectors"],
+        "torsion_angles": features["torsion_angles"],
+        "edge_index": features["edge_index"],
+        "edge_scalars": features["edge_scalars"],
+        "edge_vectors": features["edge_vectors"],
+        "edge_frames": features["edge_frames"],
+        "pose": {
+            "rotation": record.rotation.clone(),
+            "translation": record.translation.clone(),
+        },
+        "metadata": metadata,
+    }
+    return sample
