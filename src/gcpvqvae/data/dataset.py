@@ -38,7 +38,9 @@ except RuntimeError:
     pass
 
 
-def _load_records_for_dataset(args: Tuple[str, int, Optional[Sequence[str]]]) -> List[BackboneRecord]:
+def _load_records_for_dataset(
+    args: Tuple[str, int, Optional[Sequence[str]]],
+) -> List[BackboneRecord]:
     """Load backbone records for a single structure path.
 
     Args:
@@ -65,7 +67,49 @@ def _load_records_for_dataset(args: Tuple[str, int, Optional[Sequence[str]]]) ->
 
         filtered.append(record)
 
-    return filtered
+    return [_serialise_record(record) for record in filtered]
+
+
+def _serialise_record(record: BackboneRecord) -> Dict[str, Any]:
+    return {
+        "path": record.path,
+        "chain_id": record.chain_id,
+        "coords": record.coords.cpu().numpy(),
+        "mask": record.mask.cpu().numpy(),
+        "atom_mask": record.atom_mask.cpu().numpy(),
+        "seq": record.seq.cpu().numpy(),
+        "seq_string": record.seq_string,
+        "residue_names": list(record.residue_names),
+        "residue_ids": list(record.residue_ids),
+        "rotation": record.rotation.cpu().numpy(),
+        "translation": record.translation.cpu().numpy(),
+        "nan_mask": record.nan_mask.cpu().numpy(),
+    }
+
+
+def _deserialise_record(payload: Dict[str, Any]) -> BackboneRecord:
+    coords = torch.from_numpy(np.asarray(payload["coords"], dtype=np.float32))
+    mask = torch.from_numpy(np.asarray(payload["mask"], dtype=np.bool_)).to(torch.bool)
+    atom_mask = torch.from_numpy(np.asarray(payload["atom_mask"], dtype=np.bool_)).to(torch.bool)
+    seq = torch.from_numpy(np.asarray(payload["seq"], dtype=np.int64))
+    rotation = torch.from_numpy(np.asarray(payload["rotation"], dtype=np.float32))
+    translation = torch.from_numpy(np.asarray(payload["translation"], dtype=np.float32))
+    nan_mask = torch.from_numpy(np.asarray(payload["nan_mask"], dtype=np.bool_)).to(torch.bool)
+
+    return BackboneRecord(
+        path=str(payload["path"]),
+        chain_id=str(payload["chain_id"]),
+        coords=coords,
+        mask=mask,
+        atom_mask=atom_mask,
+        seq=seq,
+        seq_string=str(payload.get("seq_string", "")),
+        residue_names=list(payload.get("residue_names", [])),
+        residue_ids=[tuple(r) for r in payload.get("residue_ids", [])],
+        rotation=rotation,
+        translation=translation,
+        nan_mask=nan_mask,
+    )
 
 
 def _discover_files(root: Path) -> List[Path]:
@@ -267,7 +311,9 @@ class BackboneDataset(Dataset):
             if manifest_path.is_file():
                 self._init_from_preprocessed(manifest_path, chain_ids, length_cap, k)
                 if not self._keys:
-                    raise ValueError("Dataset does not contain any valid backbone chains")
+                    raise ValueError(
+                        "Dataset does not contain any valid backbone chains"
+                    )
                 return
 
         files = _discover_files(self.root)
@@ -307,7 +353,9 @@ class BackboneDataset(Dataset):
                             progress_bar.update(1)
             else:
                 for file in files:
-                    records = _load_records_for_dataset((str(file), length_cap, chain_filter))
+                    records = _load_records_for_dataset(
+                        (str(file), length_cap, chain_filter)
+                    )
                     self._store_records(records)
                     if progress_bar is not None:
                         progress_bar.update(1)
@@ -322,7 +370,7 @@ class BackboneDataset(Dataset):
         """Return the number of chains in the dataset."""
         return len(self._keys)
 
-    def _store_records(self, records: Iterable[BackboneRecord]) -> None:
+    def _store_records(self, records: Iterable[BackboneRecord | Dict[str, Any]]) -> None:
         """Cache newly parsed records and append their lookup keys.
 
         Args:
@@ -330,6 +378,8 @@ class BackboneDataset(Dataset):
                 files.
         """
         for record in records:
+            if isinstance(record, dict):
+                record = _deserialise_record(record)
             key = (record.path, record.chain_id)
             self._keys.append(key)
             if self._cache_enabled:
@@ -432,12 +482,16 @@ class BackboneDataset(Dataset):
 
         entries = manifest.get("entries")
         if isinstance(entries, list):
-            self._init_from_torch_manifest(manifest_path, manifest, entries, chain_ids, length_cap, k)
+            self._init_from_torch_manifest(
+                manifest_path, manifest, entries, chain_ids, length_cap, k
+            )
             return
 
         chains = manifest.get("chains")
         if isinstance(chains, list):
-            self._init_from_hdf5_manifest(manifest_path, chains, chain_ids, length_cap, k)
+            self._init_from_hdf5_manifest(
+                manifest_path, chains, chain_ids, length_cap, k
+            )
             return
 
         version = manifest.get("version")
@@ -576,7 +630,11 @@ class BackboneDataset(Dataset):
         if not filtered:
             raise ValueError("Dataset does not contain any valid backbone chains")
 
-        lengths = [entry.get("length") for entry in filtered if isinstance(entry.get("length"), int)]
+        lengths = [
+            entry.get("length")
+            for entry in filtered
+            if isinstance(entry.get("length"), int)
+        ]
         self._source_length_cap = max(lengths) if lengths else None
 
         self.length_cap = length_cap
@@ -632,13 +690,23 @@ class BackboneDataset(Dataset):
             cached = self._records[key]
         else:
             sample_path = self._preprocessed_files[index]
-            fmt = self._preprocessed_formats[index] if index < len(self._preprocessed_formats) else "pt"
+            fmt = (
+                self._preprocessed_formats[index]
+                if index < len(self._preprocessed_formats)
+                else "pt"
+            )
             if fmt == "pt":
                 cached = torch.load(sample_path, map_location="cpu")
                 if not isinstance(cached, dict):
-                    raise TypeError(f"Preprocessed sample at {sample_path} is not a mapping")
+                    raise TypeError(
+                        f"Preprocessed sample at {sample_path} is not a mapping"
+                    )
             elif fmt == "h5":
-                metadata = self._preprocessed_metadata[index] if index < len(self._preprocessed_metadata) else {}
+                metadata = (
+                    self._preprocessed_metadata[index]
+                    if index < len(self._preprocessed_metadata)
+                    else {}
+                )
                 cached = self._load_h5_sample(sample_path, key, metadata)
             else:
                 raise ValueError(f"Unknown preprocessed sample format: {fmt}")
@@ -763,7 +831,9 @@ class BackboneDataset(Dataset):
         return sample
 
 
-def collate_backbones(batch: List[Dict[str, Tensor | Dict[str, object]]]) -> Dict[str, Tensor | List[Dict[str, object]]]:
+def collate_backbones(
+    batch: List[Dict[str, Tensor | Dict[str, object]]],
+) -> Dict[str, Tensor | List[Dict[str, object]]]:
     """Collate backbone samples into padded batch tensors.
 
     Args:
@@ -802,7 +872,9 @@ def collate_backbones(batch: List[Dict[str, Tensor | Dict[str, object]]]) -> Dic
     nan_mask = torch.zeros((batch_size, max_len), dtype=torch.bool, device=device)
     node_scalars = torch.zeros((batch_size, max_len, 6), dtype=dtype, device=device)
     node_vectors = torch.zeros((batch_size, max_len, 3, 3), dtype=dtype, device=device)
-    backbone_vectors = torch.zeros((batch_size, max_len, 6, 3), dtype=dtype, device=device)
+    backbone_vectors = torch.zeros(
+        (batch_size, max_len, 6, 3), dtype=dtype, device=device
+    )
     torsion_angles = torch.zeros((batch_size, max_len, 3), dtype=dtype, device=device)
 
     lengths = torch.zeros((batch_size,), dtype=torch.long, device=device)
@@ -839,7 +911,9 @@ def collate_backbones(batch: List[Dict[str, Tensor | Dict[str, object]]]) -> Dic
         edge_scalars.append(item["edge_scalars"])  # type: ignore[index]
         edge_vectors.append(item["edge_vectors"])  # type: ignore[index]
         edge_frames.append(item["edge_frames"])  # type: ignore[index]
-        edge_batch.append(torch.full((edge_idx.shape[1],), i, dtype=torch.long, device=device))
+        edge_batch.append(
+            torch.full((edge_idx.shape[1],), i, dtype=torch.long, device=device)
+        )
 
         node_batch.append(torch.full((length,), i, dtype=torch.long, device=device))
 
@@ -852,12 +926,36 @@ def collate_backbones(batch: List[Dict[str, Tensor | Dict[str, object]]]) -> Dic
 
         node_offset += length
 
-    edge_index = torch.cat(edge_indices, dim=1) if edge_indices else torch.empty((2, 0), dtype=torch.long, device=device)
-    edge_scalars_tensor = torch.cat(edge_scalars, dim=0) if edge_scalars else torch.empty((0, 8), dtype=dtype, device=device)
-    edge_vectors_tensor = torch.cat(edge_vectors, dim=0) if edge_vectors else torch.empty((0, 3), dtype=dtype, device=device)
-    edge_frames_tensor = torch.cat(edge_frames, dim=0) if edge_frames else torch.empty((0, 3, 3), dtype=dtype, device=device)
-    edge_batch_tensor = torch.cat(edge_batch, dim=0) if edge_batch else torch.empty((0,), dtype=torch.long, device=device)
-    node_batch_tensor = torch.cat(node_batch, dim=0) if node_batch else torch.empty((0,), dtype=torch.long, device=device)
+    edge_index = (
+        torch.cat(edge_indices, dim=1)
+        if edge_indices
+        else torch.empty((2, 0), dtype=torch.long, device=device)
+    )
+    edge_scalars_tensor = (
+        torch.cat(edge_scalars, dim=0)
+        if edge_scalars
+        else torch.empty((0, 8), dtype=dtype, device=device)
+    )
+    edge_vectors_tensor = (
+        torch.cat(edge_vectors, dim=0)
+        if edge_vectors
+        else torch.empty((0, 3), dtype=dtype, device=device)
+    )
+    edge_frames_tensor = (
+        torch.cat(edge_frames, dim=0)
+        if edge_frames
+        else torch.empty((0, 3, 3), dtype=dtype, device=device)
+    )
+    edge_batch_tensor = (
+        torch.cat(edge_batch, dim=0)
+        if edge_batch
+        else torch.empty((0,), dtype=torch.long, device=device)
+    )
+    node_batch_tensor = (
+        torch.cat(node_batch, dim=0)
+        if node_batch
+        else torch.empty((0,), dtype=torch.long, device=device)
+    )
 
     return {
         "coords": coords,
