@@ -1,5 +1,4 @@
 from pathlib import Path
-from pathlib import Path
 
 import pytest
 import torch
@@ -20,17 +19,17 @@ from gcpvqvae.system.configuration import build_model_config, compose_overrides
 from gcpvqvae.system.train_gcpnet import _prepare_model_config
 from gcpvqvae.utils.checkpoint import load_checkpoint
 
-
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-_CHECKPOINT_PATH = (
-    _REPO_ROOT
-    / "models"
-    / "checkpoints"
-    / "gcpnet"
-    / "structure_denoising"
-    / "ca_bb"
-    / "last.ckpt"
-)
+# _CHECKPOINT_PATH = (
+#     _REPO_ROOT
+#     / "models"
+#     / "checkpoints"
+#     / "gcpnet"
+#     / "structure_denoising"
+#     / "ca_bb"
+#     / "last.ckpt"
+# )
+_CHECKPOINT_PATH = GCPVQVAE._default_gcp_checkpoint_path()
 _CONFIG_DIR = _REPO_ROOT / "src" / "gcpvqvae" / "configs"
 
 
@@ -96,9 +95,15 @@ def test_gcpconv_supports_bfloat16_inputs() -> None:
     node_scalars = torch.randn(6, conv.scalar_dim, dtype=torch.bfloat16)
     node_vectors = torch.randn(6, conv.vector_dim, 3, dtype=torch.bfloat16)
     edge_index = torch.tensor([[0, 1, 2, 3], [1, 2, 3, 4]], dtype=torch.long)
-    edge_scalars = torch.randn(edge_index.shape[1], conv.edge_scalar_dim, dtype=torch.bfloat16)
-    edge_vectors = torch.randn(edge_index.shape[1], conv.edge_vector_channels, 3, dtype=torch.bfloat16)
-    edge_frames = torch.eye(3, dtype=torch.bfloat16).expand(edge_index.shape[1], 3, 3).clone()
+    edge_scalars = torch.randn(
+        edge_index.shape[1], conv.edge_scalar_dim, dtype=torch.bfloat16
+    )
+    edge_vectors = torch.randn(
+        edge_index.shape[1], conv.edge_vector_channels, 3, dtype=torch.bfloat16
+    )
+    edge_frames = (
+        torch.eye(3, dtype=torch.bfloat16).expand(edge_index.shape[1], 3, 3).clone()
+    )
 
     node_features = ScalarVector(node_scalars, node_vectors)
     edge_features = ScalarVector(edge_scalars, edge_vectors)
@@ -111,7 +116,9 @@ def test_gcpconv_supports_bfloat16_inputs() -> None:
 
 def test_gcpnet_encoder_supports_bfloat16_inputs() -> None:
     config = GCPNetConfig(
-        message_passing=GCPMessagePassingConfig(width=GCPWidthConfig(scalar=16, vector=8)),
+        message_passing=GCPMessagePassingConfig(
+            width=GCPWidthConfig(scalar=16, vector=8)
+        ),
         feed_forward=GCPFeedForwardConfig(width=GCPWidthConfig(scalar=32, vector=8)),
         latent_dim=32,
         num_layers=2,
@@ -122,10 +129,16 @@ def test_gcpnet_encoder_supports_bfloat16_inputs() -> None:
     num_edges = 4
 
     node_scalars = torch.randn(num_nodes, config.node_scalar_dim, dtype=torch.bfloat16)
-    node_vectors = torch.randn(num_nodes, config.node_vector_dim, 3, dtype=torch.bfloat16)
+    node_vectors = torch.randn(
+        num_nodes, config.node_vector_dim, 3, dtype=torch.bfloat16
+    )
     edge_index = torch.tensor([[0, 1, 2, 3], [1, 2, 3, 4]], dtype=torch.long)
-    edge_scalars = torch.randn(num_edges, DEFAULT_EDGE_SCALAR_INPUT_DIM, dtype=torch.bfloat16)
-    edge_vectors = torch.randn(num_edges, config.edge_vector_input_dim, 3, dtype=torch.bfloat16)
+    edge_scalars = torch.randn(
+        num_edges, DEFAULT_EDGE_SCALAR_INPUT_DIM, dtype=torch.bfloat16
+    )
+    edge_vectors = torch.randn(
+        num_edges, config.edge_vector_input_dim, 3, dtype=torch.bfloat16
+    )
     edge_frames = torch.eye(3, dtype=torch.bfloat16).expand(num_edges, 3, 3).clone()
     positions = torch.randn(num_nodes, 3, dtype=torch.bfloat16)
 
@@ -168,7 +181,9 @@ def test_gcpnet_reference_checkpoint_loads() -> None:
 
 
 @pytest.mark.parametrize("config_name", ["base", "small", "xsmall"])
-def test_packaged_configs_initialize_gcpnet_from_pretrained_weights(config_name: str) -> None:
+def test_packaged_configs_initialize_gcpnet_from_pretrained_weights(
+    config_name: str,
+) -> None:
     raw = compose_overrides(_CONFIG_DIR / f"{config_name}.yaml", ())
     model_config = build_model_config(raw.get("model"))
 

@@ -214,23 +214,9 @@ class GCPVQVAE(nn.Module):
 
     @staticmethod
     def _default_gcp_checkpoint_path() -> Optional[Path]:
-        # ckpt_path = (
-        #     files("gcpvqvae")
-        #     / "models"
-        #     / "checkpoints"
-        #     / "gcpnet"
-        #     / "structure_denoising"
-        #     / "ca_bb"
-        #     / "last.ckpt"
-        # )
-        # if ckpt_path.is_file():
-        #     return ckpt_path
-        # raise FileNotFoundError(f"GCPNet checkpoint file not found at {ckpt_path}")
-
-        base_dir = Path(__file__).resolve()
-        model_root = base_dir.parent
         ckpt_path = (
-            model_root
+            files("gcpvqvae")
+            / "models"
             / "checkpoints"
             / "gcpnet"
             / "structure_denoising"
@@ -240,6 +226,20 @@ class GCPVQVAE(nn.Module):
         if ckpt_path.is_file():
             return ckpt_path
         raise FileNotFoundError(f"GCPNet checkpoint file not found at {ckpt_path}")
+
+        # base_dir = Path(__file__).resolve()
+        # model_root = base_dir.parent
+        # ckpt_path = (
+        #     model_root
+        #     / "checkpoints"
+        #     / "gcpnet"
+        #     / "structure_denoising"
+        #     / "ca_bb"
+        #     / "last.ckpt"
+        # )
+        # if ckpt_path.is_file():
+        #     return ckpt_path
+        # raise FileNotFoundError(f"GCPNet checkpoint file not found at {ckpt_path}")
 
         # base_dir = Path(__file__).resolve()
         # try:
