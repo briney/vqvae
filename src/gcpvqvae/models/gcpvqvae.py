@@ -215,7 +215,7 @@ class GCPVQVAE(nn.Module):
     @staticmethod
     def _default_gcp_checkpoint_path() -> Optional[Path]:
         ckpt_path = (
-            files("vqvae")
+            files("gcpvqvae")
             / "models"
             / "checkpoints"
             / "gcpnet"
