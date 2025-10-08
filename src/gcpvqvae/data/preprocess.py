@@ -404,15 +404,22 @@ def _process_structure_file(
         stats["parsing_errors"] += 1
         return [], stats
 
+    if not structure or len(structure) == 0:
+        stats["parsing_errors"] += 1
+        return [], stats
+
     polymer_chains: List[gemmi.Chain] = []
-    if structure:
-        model = structure[0]
+    model = structure[0] if structure else None
+    if model is not None:
         for chain in model:
             if _is_polymer_chain(chain):
                 polymer_chains.append(chain)
 
     if not polymer_chains:
-        stats["missing_coordinates"] += 1
+        if model is None or len(model) == 0:
+            stats["parsing_errors"] += 1
+        else:
+            stats["missing_coordinates"] += 1
         return [], stats
 
     if len({chain.name for chain in polymer_chains}) > 1:
