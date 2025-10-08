@@ -111,7 +111,9 @@ class GCPVQVAEConfig:
         if self.rotation.input_dim is None:
             self.rotation.input_dim = decoder_out
         if self.decoder.use_ndlinear and self.decoder.max_length is None:
-            raise ValueError("Decoder NdLinear projection requires 'max_length' to be set")
+            raise ValueError(
+                "Decoder NdLinear projection requires 'max_length' to be set"
+            )
 
 
 class GCPVQVAE(nn.Module):
@@ -212,30 +214,40 @@ class GCPVQVAE(nn.Module):
 
     @staticmethod
     def _default_gcp_checkpoint_path() -> Optional[Path]:
-        try:
-            resource = files("gcpvqvae") / "models" / "checkpoints" / "gcpnet" / "structure_denoising" / "ca_bb" / "last.ckpt"
-        except ModuleNotFoundError:
-            resource = None
+        ckpt_path = (
+            files("vqvae")
+            / "models"
+            / "checkpoints"
+            / "gcpnet"
+            / "structure_denoising"
+            / "ca_bb"
+            / "last.ckpt"
+        )
+        if ckpt_path.is_file():
+            return ckpt_path
+        raise FileNotFoundError(f"GCPNet checkpoint file not found at {ckpt_path}")
 
-        if resource is not None:
-            try:
-                with as_file(resource) as checkpoint_path:
-                    if checkpoint_path.is_file():
-                        return checkpoint_path
-            except FileNotFoundError:
-                pass
+        # base_dir = Path(__file__).resolve()
+        # try:
+        #     project_root = base_dir.parents[3]
+        # except IndexError:
+        #     return None
 
-        base_dir = Path(__file__).resolve()
-        try:
-            project_root = base_dir.parents[3]
-        except IndexError:
-            return None
-
-        checkpoint = project_root / "models" / "checkpoints" / "gcpnet" / "structure_denoising" / "ca_bb" / "last.ckpt"
-        return checkpoint
+        # checkpoint = (
+        #     project_root
+        #     / "models"
+        #     / "checkpoints"
+        #     / "gcpnet"
+        #     / "structure_denoising"
+        #     / "ca_bb"
+        #     / "last.ckpt"
+        # )
+        # return checkpoint
 
     @staticmethod
-    def _extract_gcp_state_dict(state: Mapping[str, Any]) -> Optional[Dict[str, Tensor]]:
+    def _extract_gcp_state_dict(
+        state: Mapping[str, Any],
+    ) -> Optional[Dict[str, Tensor]]:
         if not isinstance(state, Mapping):
             return None
 
@@ -253,7 +265,9 @@ class GCPVQVAE(nn.Module):
                 if isinstance(candidate, Mapping):
                     return {k: v for k, v in candidate.items() if isinstance(k, str)}
 
-        if all(isinstance(k, str) and isinstance(v, torch.Tensor) for k, v in state.items()):
+        if all(
+            isinstance(k, str) and isinstance(v, torch.Tensor) for k, v in state.items()
+        ):
             return {k: v for k, v in state.items() if isinstance(v, torch.Tensor)}
 
         return None
@@ -333,7 +347,9 @@ class GCPVQVAE(nn.Module):
         else:
             nan_mask_tensor = None
 
-        valid = mask_tensor if nan_mask_tensor is None else mask_tensor & nan_mask_tensor
+        valid = (
+            mask_tensor if nan_mask_tensor is None else mask_tensor & nan_mask_tensor
+        )
 
         batch_size, max_len = mask_tensor.shape
         latent_dim = self.config.vq.dim
@@ -343,7 +359,9 @@ class GCPVQVAE(nn.Module):
             if indices.ndim == 1:
                 indices = indices.unsqueeze(0)
 
-            quantized = torch.zeros((batch_size, max_len, latent_dim), device=device, dtype=dtype)
+            quantized = torch.zeros(
+                (batch_size, max_len, latent_dim), device=device, dtype=dtype
+            )
             if valid.any():
                 decoded = self.vq.get_output_from_indices(indices[valid])
                 quantized[valid] = decoded.to(dtype)
@@ -476,11 +494,15 @@ class GCPVQVAE(nn.Module):
                 )
             },
             xi=ca_positions,
-            batch=torch.zeros(node_scalars.shape[0], dtype=torch.long, device=node_scalars.device),
+            batch=torch.zeros(
+                node_scalars.shape[0], dtype=torch.long, device=node_scalars.device
+            ),
             ptr=torch.tensor([0, node_scalars.shape[0]], device=node_scalars.device),
             mask=mask,
         )
-        proto.valid_indices = torch.arange(node_scalars.shape[0], device=node_scalars.device)
+        proto.valid_indices = torch.arange(
+            node_scalars.shape[0], device=node_scalars.device
+        )
         proto.full_mask = mask.unsqueeze(0)
         proto.batch_size = 1
         proto.max_length = node_scalars.shape[0]
@@ -596,7 +618,9 @@ class GCPVQVAE(nn.Module):
                     mask_tensor = mask_tensor.unsqueeze(0)
 
             latent_dim = self.config.vq.dim
-            dequant = torch.zeros((batch, length, latent_dim), device=device, dtype=dtype)
+            dequant = torch.zeros(
+                (batch, length, latent_dim), device=device, dtype=dtype
+            )
             valid = mask_tensor & (tokens_tensor >= 0)
             if valid.any():
                 flat_indices = tokens_tensor[valid]
@@ -649,7 +673,9 @@ class GCPVQVAE(nn.Module):
                     else:
                         seq_chars_b = "".join(seq_chars)[:valid_len]
 
-                    residue_ids = metadata.get("residue_ids", [(i + 1, "") for i in range(valid_len)])
+                    residue_ids = metadata.get(
+                        "residue_ids", [(i + 1, "") for i in range(valid_len)]
+                    )
                     residue_names = metadata.get("residue_names", ["UNK"] * valid_len)
 
                     record = BackboneRecord(
@@ -679,7 +705,9 @@ class GCPVQVAE(nn.Module):
                 "translations": rigid["translations"].cpu(),
             }
             result = {
-                "coords": coords_global.squeeze(0).cpu() if batch == 1 else coords_global.cpu(),
+                "coords": coords_global.squeeze(0).cpu()
+                if batch == 1
+                else coords_global.cpu(),
                 "coords_central": coords_central.squeeze(0).cpu()
                 if batch == 1
                 else coords_central.cpu(),
