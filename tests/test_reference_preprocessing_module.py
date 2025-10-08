@@ -68,6 +68,7 @@ def _write_structure(
     num_residues: int,
     chain_ids: Iterable[str] = ("A",),
     missing_ca: Iterable[int] | None = None,
+    format: str = "cif",
 ) -> None:
     missing_set = set(missing_ca or [])
 
@@ -95,8 +96,13 @@ def _write_structure(
 
     structure.add_model(model)
     structure.setup_entities()
-    doc = structure.make_mmcif_document()
-    doc.write_file(str(path))
+    if format == "cif":
+        doc = structure.make_mmcif_document()
+        doc.write_file(str(path))
+    elif format == "pdb":
+        structure.write_pdb(str(path))
+    else:  # pragma: no cover - guardrail for unexpected formats
+        raise ValueError(f"Unsupported format: {format}")
 
 
 def _assert_h5_matches_expected(generated_path: Path, expected: dict[str, object]) -> None:
@@ -164,9 +170,14 @@ def test_preprocess_dataset_collects_stats(tmp_path: Path) -> None:
     input_dir = tmp_path / "input"
     input_dir.mkdir()
 
-    _write_structure(input_dir / "valid.cif", num_residues=10)
+    _write_structure(input_dir / "valid.pdb", num_residues=10, format="pdb")
     _write_structure(input_dir / "short.cif", num_residues=4)
-    _write_structure(input_dir / "ratio.cif", num_residues=10, missing_ca={7, 8, 9})
+    _write_structure(
+        input_dir / "ratio.pdb",
+        num_residues=10,
+        missing_ca={7, 8, 9},
+        format="pdb",
+    )
     _write_structure(
         input_dir / "block.cif",
         num_residues=80,
@@ -178,7 +189,7 @@ def test_preprocess_dataset_collects_stats(tmp_path: Path) -> None:
     complex_path = input_dir / "complex.cif"
     _write_structure(complex_path, num_residues=6, chain_ids=["A", "B"])
 
-    (input_dir / "invalid.cif").write_text("not a cif", encoding="utf-8")
+    (input_dir / "invalid.pdb").write_text("not a pdb", encoding="utf-8")
 
     output_dir = tmp_path / "output"
     manifest_path, stats = preprocess_dataset(
@@ -187,7 +198,6 @@ def test_preprocess_dataset_collects_stats(tmp_path: Path) -> None:
         max_len=90,
         min_len=5,
         max_workers=2,
-        use_cif=True,
         file_index=True,
     )
 
@@ -227,13 +237,12 @@ def test_preprocess_dataset_collects_stats(tmp_path: Path) -> None:
 def test_preprocess_dataset_h5_matches_fixture(tmp_path: Path) -> None:
     input_dir = tmp_path / "input"
     input_dir.mkdir()
-    _write_structure(input_dir / "valid.cif", num_residues=5)
+    _write_structure(input_dir / "valid.pdb", num_residues=5, format="pdb")
 
     output_dir = tmp_path / "output"
     manifest_path, _ = preprocess_dataset(
         input_dir,
         output_dir,
-        use_cif=True,
         file_index=True,
     )
 
@@ -256,7 +265,6 @@ def test_preprocess_dataset_h5_preserves_nans(tmp_path: Path) -> None:
     manifest_path, _ = preprocess_dataset(
         input_dir,
         output_dir,
-        use_cif=True,
         file_index=True,
     )
 
@@ -276,7 +284,6 @@ def test_preprocess_dataset_omits_index_when_requested(tmp_path: Path) -> None:
     manifest_path, stats = preprocess_dataset(
         input_dir,
         output_dir,
-        use_cif=True,
         file_index=False,
     )
 

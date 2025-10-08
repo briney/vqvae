@@ -359,28 +359,26 @@ def _write_h5(
     return file_path
 
 
-def _discover_structure_files(input_root: Path, *, use_cif: bool) -> List[Path]:
+def _discover_structure_files(input_root: Path) -> List[Path]:
     if input_root.is_file():
         return [input_root]
 
-    if use_cif:
-        patterns = ["*.cif", "*.cif.gz", "*.mmcif", "*.mmcif.gz"]
-    else:
-        patterns = [
-            "*.cif",
-            "*.cif.gz",
-            "*.mmcif",
-            "*.mmcif.gz",
-            "*.pdb",
-            "*.pdb.gz",
-            "*.ent",
-            "*.ent.gz",
-        ]
+    patterns = [
+        "*.cif",
+        "*.cif.gz",
+        "*.mmcif",
+        "*.mmcif.gz",
+        "*.pdb",
+        "*.pdb.gz",
+        "*.ent",
+        "*.ent.gz",
+    ]
 
-    files: List[Path] = []
+    files: set[Path] = set()
     for pattern in patterns:
-        files.extend(sorted(input_root.rglob(pattern)))
-    return files
+        files.update(input_root.rglob(pattern))
+
+    return sorted(files, key=lambda path: path.as_posix())
 
 
 def _is_polymer_chain(chain: gemmi.Chain) -> bool:
@@ -406,15 +404,22 @@ def _process_structure_file(
         stats["parsing_errors"] += 1
         return [], stats
 
+    if not structure or len(structure) == 0:
+        stats["parsing_errors"] += 1
+        return [], stats
+
     polymer_chains: List[gemmi.Chain] = []
-    if structure:
-        model = structure[0]
+    model = structure[0] if structure else None
+    if model is not None:
         for chain in model:
             if _is_polymer_chain(chain):
                 polymer_chains.append(chain)
 
     if not polymer_chains:
-        stats["missing_coordinates"] += 1
+        if model is None or len(model) == 0:
+            stats["parsing_errors"] += 1
+        else:
+            stats["missing_coordinates"] += 1
         return [], stats
 
     if len({chain.name for chain in polymer_chains}) > 1:
@@ -599,14 +604,13 @@ def preprocess_dataset(
     max_len: Optional[int] = None,
     min_len: Optional[int] = None,
     max_workers: Optional[int] = None,
-    use_cif: bool = False,
     file_index: bool = True,
     gap_threshold: Optional[float] = None,
 ):
     """Preprocess AlphaFold-style structures into backbone summaries."""
 
     print(f"\nSearching for structure files in {input_root.resolve()}...", flush=True)
-    files = _discover_structure_files(input_root, use_cif=use_cif)
+    files = _discover_structure_files(input_root)
     print(
         f"  found {len(files)} structure files.",
         flush=True,
