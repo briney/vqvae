@@ -204,12 +204,12 @@ class GCPVQVAE(nn.Module):
 
         strict = getattr(self.config.gcp, "strict_init", True)
         missing, unexpected = self.encoder_gcp.load_state_dict(coerced, strict=strict)
-        if (missing or unexpected) and not strict:
-            warnings.warn(
-                "Loaded GCPNet weights with missing keys %s and unexpected keys %s"
-                % (missing, unexpected),
-                UserWarning,
-            )
+        # if (missing or unexpected) and not strict:
+        #     warnings.warn(
+        #         "Loaded GCPNet weights with missing keys %s and unexpected keys %s"
+        #         % (missing, unexpected),
+        #         UserWarning,
+        #     )
 
     @staticmethod
     def _default_gcp_checkpoint_path() -> Optional[Path]:
