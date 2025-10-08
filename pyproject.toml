@@ -37,3 +37,8 @@ gpcvq = "gcpvqvae.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"gcpvqvae" = [
+    "models/checkpoints/gcpnet/structure_denoising/ca_bb/last.ckpt",
+]
