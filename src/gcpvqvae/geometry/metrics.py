@@ -12,16 +12,18 @@ Tensor = torch.Tensor
 def rmsd(coords_a: Tensor, coords_b: Tensor, *, mask: Optional[Tensor] = None) -> Tensor:
     """Compute the root-mean-square deviation between two coordinate sets.
 
-    Parameters
-    ----------
-    coords_a, coords_b:
-        Tensors containing matching coordinates.  The tensors can either be of
-        shape ``(..., 3)`` or ``(..., 3, 3)`` (for three backbone atoms).  The
-        function operates element-wise on the leading dimensions.
-    mask:
-        Optional boolean mask whose ``True`` entries mark valid residues.  The
-        mask is broadcast against the leading dimensions of the coordinate
-        tensors.
+    Args:
+        coords_a: Tensor containing coordinates of shape ``(..., 3)`` or
+            ``(..., 3, 3)``.
+        coords_b: Tensor with the same shape as ``coords_a``.
+        mask: Optional boolean tensor broadcastable to the leading dimensions,
+            marking which residues contribute to the RMSD.
+
+    Returns:
+        Scalar tensor with the RMSD value.
+
+    Raises:
+        ValueError: If the input shapes mismatch.
     """
 
     if coords_a.shape != coords_b.shape:
@@ -56,9 +58,19 @@ def tm_score(
 ) -> Tensor:
     """Compute an approximate TM-score between two aligned structures.
 
-    The implementation follows the standard TM-score formulation operating on
-    the per-residue Cα coordinates.  The caller is expected to align the
-    structures beforehand (for example via :func:`gcpvqvae.geometry.frames.kabsch_align`).
+    Args:
+        coords_a: Tensor of shape ``(..., 3, 3)`` containing aligned backbone
+            coordinates.
+        coords_b: Tensor with the same shape as ``coords_a``.
+        mask: Optional boolean tensor selecting residues to include.
+        length_scale: Override for the TM-score normalisation constant.
+
+    Returns:
+        Scalar tensor containing the TM-score in ``[0, 1]``.
+
+    Raises:
+        ValueError: If input shapes mismatch or tensors do not contain backbone
+            atoms.
     """
 
     if coords_a.shape != coords_b.shape:
@@ -97,8 +109,19 @@ def gdt_ts(
 ) -> Tensor:
     """Compute the Global Distance Test Total Score (GDT-TS).
 
-    The metric measures the fraction of residues whose Cα atoms fall within the
-    specified distance thresholds after the structures have been aligned.
+    Args:
+        coords_a: Tensor of shape ``(..., 3, 3)`` with aligned backbone atoms.
+        coords_b: Tensor with the same shape as ``coords_a``.
+        mask: Optional boolean tensor selecting residues to include.
+        thresholds: Iterable of distance cut-offs in Å.
+
+    Returns:
+        Scalar tensor containing the mean fraction of residues within each
+        threshold.
+
+    Raises:
+        ValueError: If inputs have mismatched shapes, omit backbone atoms, or if
+            ``thresholds`` is empty.
     """
 
     if coords_a.shape != coords_b.shape:

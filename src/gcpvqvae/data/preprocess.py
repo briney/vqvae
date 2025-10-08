@@ -59,7 +59,15 @@ class PreprocessedChain:
 
 
 def _missing_mask(chain: PreprocessedChain) -> np.ndarray:
-    """Return a boolean mask marking residues without valid Cα positions."""
+    """Return a boolean mask marking residues without valid Cα positions.
+
+    Args:
+        chain: Preprocessed chain with ``coords`` field of shape ``(L, 4, 3)``.
+
+    Returns:
+        Boolean numpy array of shape ``(L,)`` where ``True`` denotes positions
+        lacking CA coordinates.
+    """
 
     # Missing residues manifest either through explicit NaNs introduced when the
     # raw residue lacked a backbone atom, or through gap padding when a jump in
@@ -69,7 +77,14 @@ def _missing_mask(chain: PreprocessedChain) -> np.ndarray:
 
 
 def _longest_missing_block(mask: np.ndarray) -> int:
-    """Compute the maximum length of a contiguous missing segment."""
+    """Compute the maximum length of a contiguous missing segment.
+
+    Args:
+        mask: Boolean mask indicating missing residues.
+
+    Returns:
+        Length of the longest consecutive ``True`` region in ``mask``.
+    """
 
     if mask.size == 0:
         return 0
@@ -92,7 +107,17 @@ def _validate_length(
     min_len: Optional[int],
     max_len: Optional[int],
 ) -> Tuple[bool, Optional[str]]:
-    """Check whether a chain length satisfies the configured bounds."""
+    """Check whether a chain length satisfies the configured bounds.
+
+    Args:
+        length: Observed chain length.
+        min_len: Minimum allowable length; ``None`` disables the lower bound.
+        max_len: Maximum allowable length; ``None`` disables the upper bound.
+
+    Returns:
+        Tuple ``(ok, reason)`` where ``ok`` indicates whether the chain satisfies
+        the bounds and ``reason`` provides the rejection key used in statistics.
+    """
 
     if min_len is not None and length < min_len:
         return False, "chains_too_short"
@@ -107,7 +132,19 @@ def _validate_missing_thresholds(
     max_missing_ratio: float = _MAX_MISSING_RATIO,
     max_missing_block: int = _MAX_MISSING_BLOCK,
 ) -> Tuple[bool, Optional[str], float, int]:
-    """Validate missing-coordinate statistics after gap padding."""
+    """Validate missing-coordinate statistics after gap padding.
+
+    Args:
+        chain: Processed chain containing NaN-padded coordinates.
+        max_missing_ratio: Maximum allowed fraction of missing residues.
+        max_missing_block: Maximum allowed consecutive run of missing residues.
+
+    Returns:
+        Tuple ``(ok, reason, ratio, longest)`` where ``ok`` flags whether the
+        chain passes the thresholds, ``reason`` contains the stats key when it
+        fails, ``ratio`` is the missing-residue proportion, and ``longest`` is
+        the longest contiguous missing segment.
+    """
 
     mask = _missing_mask(chain)
     if mask.size == 0:
@@ -124,6 +161,14 @@ def _validate_missing_thresholds(
 
 
 def _load_structure(path: Path) -> gemmi.Structure:
+    """Load a structure file into a Gemmi ``Structure`` object.
+
+    Args:
+        path: Path to an mmCIF or PDB file (optionally ``.gz`` compressed).
+
+    Returns:
+        Parsed Gemmi structure with entities instantiated.
+    """
     suffixes = [suffix.lower() for suffix in path.suffixes]
     compressed = suffixes and suffixes[-1] == ".gz"
     if compressed:
@@ -140,10 +185,26 @@ def _load_structure(path: Path) -> gemmi.Structure:
 
 
 def _iter_polymer_residues(chain: gemmi.Chain) -> Iterable[gemmi.Residue]:
+    """Yield polymer residues from a Gemmi chain.
+
+    Args:
+        chain: Chain from which polymer residues should be emitted.
+
+    Returns:
+        Iterator over polymer residues in sequence order.
+    """
     yield from chain.get_polymer()
 
 
 def _seq_id(residue: gemmi.Residue) -> Optional[int]:
+    """Return the integer sequence identifier for a residue, if available.
+
+    Args:
+        residue: Residue whose ``seqid`` should be inspected.
+
+    Returns:
+        Integer sequence identifier or ``None`` if unavailable.
+    """
     try:
         return int(residue.seqid.num)
     except Exception:
@@ -151,6 +212,15 @@ def _seq_id(residue: gemmi.Residue) -> Optional[int]:
 
 
 def _select_atom(residue: gemmi.Residue, atom_name: str) -> Optional[gemmi.Atom]:
+    """Select the highest-occupancy atom with a given name from a residue.
+
+    Args:
+        residue: Residue to inspect.
+        atom_name: Name of the atom (e.g., ``"CA"``).
+
+    Returns:
+        Gemmi atom with the best occupancy or ``None`` if missing.
+    """
     best_atom: Optional[gemmi.Atom] = None
     best_occupancy = -math.inf
     for atom in residue:
@@ -166,6 +236,18 @@ def _select_atom(residue: gemmi.Residue, atom_name: str) -> Optional[gemmi.Atom]
 def _extract_residue_data(
     residue: gemmi.Residue,
 ) -> Tuple[np.ndarray, Optional[np.ndarray], float, bool]:
+    """Extract backbone coordinates and reliability metadata from a residue.
+
+    Args:
+        residue: Gemmi residue from which to pull backbone atoms.
+
+    Returns:
+        Tuple ``(coords, ca_position, ca_plddt, complete)`` where ``coords`` is a
+        ``(4, 3)`` array of backbone coordinates (NaN when missing),
+        ``ca_position`` holds the CA coordinates when present, ``ca_plddt`` is
+        the stored B-factor interpreted as pLDDT, and ``complete`` indicates
+        whether all required atoms were observed.
+    """
     coords = np.full((len(_BACKBONE_ATOMS), 3), np.nan, dtype=np.float64)
     ca_position: Optional[np.ndarray] = None
     ca_plddt = math.nan
@@ -192,6 +274,15 @@ def _extract_residue_data(
 
 
 def _gap_length(prev_seqid: Optional[int], current_seqid: Optional[int]) -> int:
+    """Compute the number of missing residues implied by sequence IDs.
+
+    Args:
+        prev_seqid: Sequence identifier of the previous residue.
+        current_seqid: Sequence identifier of the current residue.
+
+    Returns:
+        Number of absent residues between the identifiers (0 when contiguous).
+    """
     if prev_seqid is None or current_seqid is None:
         return 0
     gap = int(current_seqid) - int(prev_seqid)
@@ -206,6 +297,18 @@ def _should_insert_gap(
     curr_ca: Optional[np.ndarray],
     gap_threshold: Optional[float],
 ) -> bool:
+    """Determine whether a padded gap should be inserted between residues.
+
+    Args:
+        missing: Count of missing residues inferred from sequence IDs.
+        prev_ca: CA coordinates of the previous residue, if available.
+        curr_ca: CA coordinates of the current residue, if available.
+        gap_threshold: Maximum allowed CA-CA distance before treating the region
+            as a gap. ``None`` always inserts when ``missing > 0``.
+
+    Returns:
+        ``True`` if a gap should be inserted, otherwise ``False``.
+    """
     if missing <= 0:
         return False
     if gap_threshold is None:
@@ -223,6 +326,20 @@ def preprocess_chain(
     *,
     gap_threshold: Optional[float] = None,
 ) -> PreprocessedChain:
+    """Convert a Gemmi chain into a :class:`PreprocessedChain`.
+
+    Args:
+        chain: Polymer chain containing backbone coordinates.
+        gap_threshold: Maximum allowed distance (Å) between neighbouring CA atoms
+            before padding a gap; ``None`` pads for any missing residue index.
+
+    Returns:
+        Preprocessed chain with NaN-padded coordinates of shape ``(L, 4, 3)`` and
+        pLDDT scores ``(L,)``.
+
+    Raises:
+        ValueError: If the chain contains no polymer residues.
+    """
     residues = list(_iter_polymer_residues(chain))
     if not residues:
         raise ValueError(f"Chain {chain.name!r} does not contain polymer residues")
@@ -279,6 +396,20 @@ def preprocess_structure(
     *,
     gap_threshold: Optional[float] = None,
 ) -> PreprocessedChain:
+    """Preprocess a single chain from a structure file.
+
+    Args:
+        path: Path to an mmCIF or PDB file (optionally ``.gz`` compressed).
+        chain_id: Identifier of the chain to preprocess.
+        gap_threshold: Gap detection threshold passed to :func:`preprocess_chain`.
+
+    Returns:
+        :class:`PreprocessedChain` instance representing the requested chain.
+
+    Raises:
+        FileNotFoundError: If ``path`` does not exist.
+        ValueError: If the chain cannot be located.
+    """
     path_obj = Path(path)
     if not path_obj.exists():
         raise FileNotFoundError(path)
@@ -320,6 +451,14 @@ class _ChainRecord:
 
 
 def _structure_stem(path: Path) -> str:
+    """Return a filesystem-friendly stem for a structure path.
+
+    Args:
+        path: Path to a structure file.
+
+    Returns:
+        Safe filename stem without duplicate extensions.
+    """
     name = path.name
     if name.endswith(".gz"):
         name = name[:-3]
@@ -327,6 +466,14 @@ def _structure_stem(path: Path) -> str:
 
 
 def _sanitise_chain_id(chain_id: str) -> str:
+    """Sanitise a chain identifier for use in filenames.
+
+    Args:
+        chain_id: Original chain identifier.
+
+    Returns:
+        Chain identifier safe for filesystem use.
+    """
     safe = chain_id.strip()
     if not safe:
         return "unknown"
@@ -336,6 +483,17 @@ def _sanitise_chain_id(chain_id: str) -> str:
 def _write_h5(
     record: _ChainRecord, *, output_dir: Path, include_index: bool, index: int
 ) -> Path:
+    """Write a preprocessed chain to an HDF5 file.
+
+    Args:
+        record: Processed chain metadata and arrays.
+        output_dir: Destination directory where the file will be created.
+        include_index: Whether to prefix filenames with an incremental index.
+        index: Unique index used when ``include_index`` is ``True``.
+
+    Returns:
+        Path to the written ``.h5`` file.
+    """
     stem = _structure_stem(Path(record.source_path))
     chain_id = _sanitise_chain_id(record.chain_id)
     if include_index:
@@ -360,6 +518,14 @@ def _write_h5(
 
 
 def _discover_structure_files(input_root: Path) -> List[Path]:
+    """Return a sorted list of structure files beneath ``input_root``.
+
+    Args:
+        input_root: Directory tree or single file containing structures.
+
+    Returns:
+        Sorted list of matching file paths.
+    """
     if input_root.is_file():
         return [input_root]
 
@@ -382,6 +548,14 @@ def _discover_structure_files(input_root: Path) -> List[Path]:
 
 
 def _is_polymer_chain(chain: gemmi.Chain) -> bool:
+    """Return ``True`` if the chain contains at least one canonical residue.
+
+    Args:
+        chain: Chain to inspect.
+
+    Returns:
+        ``True`` if the chain contains canonical polymer residues.
+    """
     residues = [
         res for res in chain.get_polymer() if THREE_TO_ONE.get(res.name.upper())
     ]
@@ -395,6 +569,19 @@ def _process_structure_file(
     max_len: Optional[int],
     gap_threshold: Optional[float],
 ) -> Tuple[List[_ChainRecord], Counter]:
+    """Process a structure and return cropped chains plus statistics.
+
+    Args:
+        file_path: Path to the structure file.
+        min_len: Minimum allowed chain length.
+        max_len: Maximum allowed chain length.
+        gap_threshold: Gap threshold forwarded to :func:`preprocess_chain`.
+
+    Returns:
+        Tuple ``(records, stats)`` where ``records`` is a list of successfully
+        preprocessed chains and ``stats`` is a :class:`collections.Counter`
+        tracking processing outcomes.
+    """
     stats = Counter()
     stats["files_total"] += 1
 
@@ -471,6 +658,17 @@ def _write_manifest(
     stats: Counter,
     input_root: Path,
 ) -> Path:
+    """Write a manifest summarising the cached dataset.
+
+    Args:
+        output_dir: Directory where the manifest should be written.
+        entries: Sequence of processed chain records.
+        stats: Counter tracking preprocessing statistics.
+        input_root: Root path that was scanned for structures.
+
+    Returns:
+        Path to the written manifest JSON file.
+    """
     manifest = {
         "input_root": str(input_root.resolve()),
         "num_chains": len(entries),
@@ -484,6 +682,12 @@ def _write_manifest(
 
 
 def _write_file_index(output_dir: Path, files: Sequence[Path]) -> None:
+    """Persist an index listing the raw structure files used as input.
+
+    Args:
+        output_dir: Directory where ``file_index.json`` should be written.
+        files: Sequence of file paths included in the preprocessing run.
+    """
     index_path = output_dir / _FILE_INDEX_NAME
     payload = {"files": [str(path) for path in files]}
     with index_path.open("w", encoding="utf-8") as handle:
@@ -491,6 +695,14 @@ def _write_file_index(output_dir: Path, files: Sequence[Path]) -> None:
 
 
 def _to_cpu(data):
+    """Detach tensors to CPU recursively within nested containers.
+
+    Args:
+        data: Arbitrary nested structure of tensors and Python containers.
+
+    Returns:
+        CPU-only copy of ``data`` preserving structure.
+    """
     if isinstance(data, torch.Tensor):
         return data.detach().cpu()
     if isinstance(data, dict):
@@ -512,7 +724,23 @@ def preprocess_backbone_dataset(
     overwrite: bool = False,
     progress: bool = True,
 ) -> Path:
-    """Materialise a :class:`BackboneDataset` to disk for reuse."""
+    """Materialise a :class:`BackboneDataset` to disk for reuse.
+
+    Args:
+        input_root: Path to raw structures compatible with :class:`BackboneDataset`.
+        output_dir: Destination directory for the cached tensors and manifest.
+        chain_ids: Optional chain identifiers to retain.
+        length_cap: Maximum residue count per chain.
+        k: Nearest-neighbour parameter for edge construction.
+        overwrite: Whether to delete pre-existing output directories.
+        progress: Display progress bars while iterating the dataset.
+
+    Returns:
+        Path to the generated manifest file inside ``output_dir``.
+
+    Raises:
+        FileExistsError: If ``output_dir`` exists and ``overwrite`` is ``False``.
+    """
 
     output_path = Path(output_dir)
     if output_path.exists():
@@ -607,7 +835,27 @@ def preprocess_dataset(
     file_index: bool = True,
     gap_threshold: Optional[float] = None,
 ):
-    """Preprocess AlphaFold-style structures into backbone summaries."""
+    """Preprocess AlphaFold-style structures into backbone summaries.
+
+    Args:
+        input_root: Directory tree or file containing structures to convert.
+        output_dir: Destination directory for HDF5 samples and manifest.
+        max_len: Maximum allowed chain length; ``None`` preserves full chains.
+        min_len: Minimum allowed chain length; ``None`` disables the lower bound.
+        max_workers: Number of worker processes for parallel preprocessing. Set
+            to ``1`` for serial execution or ``None`` to auto-detect.
+        file_index: Whether to generate ``file_index.json`` enumerating inputs.
+        gap_threshold: Maximum CA-CA distance before inserting synthetic gaps.
+
+    Returns:
+        Tuple ``(manifest_path, stats)`` where ``manifest_path`` points to
+        ``preprocessed_dataset.json`` and ``stats`` is a :class:`Counter`
+        summarising preprocessing outcomes.
+
+    Raises:
+        ValueError: If no structure files are discovered.
+        NotADirectoryError: If ``output_dir`` exists but is not a directory.
+    """
 
     print(f"\nSearching for structure files in {input_root.resolve()}...", flush=True)
     files = _discover_structure_files(input_root)

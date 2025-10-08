@@ -68,7 +68,15 @@ class ChainExtractionStats:
 
 
 def _global_identity(seq_a: str, seq_b: str) -> float:
-    """Return the global sequence identity between two chains."""
+    """Return the global sequence identity between two chains.
+
+    Args:
+        seq_a: First amino-acid sequence.
+        seq_b: Second amino-acid sequence.
+
+    Returns:
+        Fraction of identical residues in a global alignment in ``[0.0, 1.0]``.
+    """
 
     if not seq_a or not seq_b:
         return 0.0
@@ -80,7 +88,15 @@ def _global_identity(seq_a: str, seq_b: str) -> float:
 
 
 def _parse_structure(path: Path):
-    """Parse ``path`` with the appropriate Biopython parser and return a structure."""
+    """Parse ``path`` with the appropriate Biopython parser.
+
+    Args:
+        path: Path to an mmCIF or PDB file. ``.gz`` suffix triggers compressed
+            reading.
+
+    Returns:
+        Biopython structure object with the structure contents parsed.
+    """
 
     suffixes = [suffix.lower() for suffix in path.suffixes]
     compressed = suffixes and suffixes[-1] == ".gz"
@@ -98,6 +114,17 @@ def _parse_structure(path: Path):
 
 
 def _first_model(structure):
+    """Return the first model from a Biopython structure.
+
+    Args:
+        structure: Structure object returned by Biopython parsers.
+
+    Returns:
+        First model contained in the structure.
+
+    Raises:
+        ValueError: If the structure contains no models.
+    """
     models = list(structure.get_models())
     if not models:
         raise ValueError("Structure does not contain any models")
@@ -105,6 +132,17 @@ def _first_model(structure):
 
 
 def _build_chain_metadata(chains: Iterable[Chain], *, min_len: int) -> Tuple[List[ChainMetadata], ChainExtractionStats]:
+    """Analyse chains and collect metadata for downstream filtering.
+
+    Args:
+        chains: Iterable over Biopython chain objects.
+        min_len: Minimum allowed sequence length; shorter chains are dropped.
+
+    Returns:
+        Tuple ``(metadata, stats)`` where ``metadata`` is a list of
+        :class:`ChainMetadata` records sorted by sequence length and ``stats`` is
+        a :class:`ChainExtractionStats` summary.
+    """
     builder = PPBuilder()
     stats = ChainExtractionStats()
     initial_chain_ids: List[str] = []
@@ -166,7 +204,20 @@ def _build_chain_metadata(chains: Iterable[Chain], *, min_len: int) -> Tuple[Lis
 
 
 def extract_chains(path: str | Path, *, min_len: int = 0) -> Tuple[List[ChainMetadata], ChainExtractionStats]:
-    """Load ``path`` and return filtered chain metadata with processing stats."""
+    """Load ``path`` and return filtered chain metadata with processing stats.
+
+    Args:
+        path: Path to an mmCIF or PDB file (plain text or gzip-compressed).
+        min_len: Minimum sequence length to retain.
+
+    Returns:
+        Tuple ``(metadata, stats)`` where ``metadata`` is a list of
+        :class:`ChainMetadata` instances and ``stats`` details filtering events.
+
+    Raises:
+        FileNotFoundError: If ``path`` does not exist.
+        ValueError: If the structure lacks models.
+    """
 
     path_obj = Path(path)
     if not path_obj.exists():

@@ -68,6 +68,16 @@ _PDB_SUFFIXES = {".pdb", ".ent"}
 
 
 def _split_suffixes(path: Path) -> Tuple[List[str], bool]:
+    """Extract suffixes while detecting gzip compression.
+
+    Args:
+        path: File path to inspect.
+
+    Returns:
+        Tuple ``(suffixes, compressed)`` where ``suffixes`` is a list of lowercase
+        extensions without the ``.gz`` suffix, and ``compressed`` indicates
+        whether the original path ends with ``.gz``.
+    """
     suffixes = [suffix.lower() for suffix in path.suffixes]
     compressed = False
     if suffixes and suffixes[-1] == ".gz":
@@ -77,6 +87,15 @@ def _split_suffixes(path: Path) -> Tuple[List[str], bool]:
 
 
 def _detect_format(path: Path) -> str:
+    """Infer structure format from the file suffix.
+
+    Args:
+        path: File path pointing to a structure.
+
+    Returns:
+        String ``"pdb"`` when the path ends with a PDB-style suffix, otherwise
+        ``"mmcif"``.
+    """
     suffixes, _ = _split_suffixes(path)
     suffix = suffixes[-1] if suffixes else path.suffix.lower()
     if suffix in _PDB_SUFFIXES:
@@ -107,7 +126,18 @@ class BackboneRecord:
 
 
 def _normalise_coords(coords: Tensor, mask: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
-    """Centralise the coordinates and return the applied rigid transform."""
+    """Centralise coordinates and compute the applied rigid transform.
+
+    Args:
+        coords: Tensor of shape ``(L, 3, 3)`` containing backbone atom positions.
+        mask: Boolean tensor of shape ``(L,)`` indicating residues with complete
+            backbones.
+
+    Returns:
+        Tuple ``(coords_centered, rotation, translation)`` where the centred
+        coordinates are subtracting the CA centroid, ``rotation`` is the identity
+        matrix ``(3, 3)``, and ``translation`` is the centroid vector ``(3,)``.
+    """
 
     ca_mask = mask.to(torch.bool)
     ca_positions = coords[:, 1, :]
@@ -127,6 +157,19 @@ def _build_records_from_gemmi_structure(
     length_cap: int,
     chain_id: Optional[str],
 ) -> List[BackboneRecord]:
+    """Convert a Gemmi structure into backbone records.
+
+    Args:
+        structure: Parsed Gemmi structure object.
+        path: Original file path, stored in each record for traceability.
+        length_cap: Maximum number of residues retained per chain; values ``<=0``
+            disable truncation.
+        chain_id: Optional chain identifier filter.
+
+    Returns:
+        List of :class:`BackboneRecord` instances extracted from ``structure``.
+        Each record contains CA-centred coordinates with shape ``(L, 3, 3)``.
+    """
     records: List[BackboneRecord] = []
 
     for model in structure:
@@ -135,7 +178,11 @@ def _build_records_from_gemmi_structure(
             if chain_id is not None and chain_name != chain_id:
                 continue
 
-            residues = [res for res in chain.get_polymer() if res.name.upper() in CANONICAL_RESIDUES]
+            residues = [
+                res
+                for res in chain.get_polymer()
+                if res.name.upper() in CANONICAL_RESIDUES
+            ]
             if not residues:
                 continue
 
@@ -173,7 +220,10 @@ def _build_records_from_gemmi_structure(
                     occupancy = atom.occ
                     if occupancy < atom_coords[name][1]:
                         continue
-                    atom_coords[name] = ((atom.pos.x, atom.pos.y, atom.pos.z), occupancy)
+                    atom_coords[name] = (
+                        (atom.pos.x, atom.pos.y, atom.pos.z),
+                        occupancy,
+                    )
 
                 coords_row: List[List[float]] = []
                 atom_mask = []
@@ -228,6 +278,17 @@ def _build_records_from_gemmi_structure(
 def _load_mmcif_with_gemmi(
     path: Path, *, length_cap: int, chain_id: Optional[str]
 ) -> List[BackboneRecord]:
+    """Load an mmCIF file using Gemmi.
+
+    Args:
+        path: Path to an mmCIF file.
+        length_cap: Maximum number of residues retained per chain.
+        chain_id: Optional chain filter.
+
+    Returns:
+        List of backbone records parsed by Gemmi. Returns an empty list when
+        Gemmi is unavailable.
+    """
     if gemmi is None:
         return []
 
@@ -243,6 +304,17 @@ def _load_mmcif_with_gemmi(
 def _load_pdb_with_gemmi(
     path: Path, *, length_cap: int, chain_id: Optional[str]
 ) -> List[BackboneRecord]:
+    """Load a PDB file using Gemmi.
+
+    Args:
+        path: Path to a PDB file.
+        length_cap: Maximum number of residues retained per chain.
+        chain_id: Optional chain filter.
+
+    Returns:
+        List of backbone records parsed by Gemmi. Returns an empty list when
+        Gemmi is unavailable.
+    """
     if gemmi is None:
         return []
 
@@ -256,6 +328,17 @@ def _load_pdb_with_gemmi(
 def _build_records_from_biopython_structure(
     structure, path: Path, *, length_cap: int, chain_id: Optional[str]
 ) -> List[BackboneRecord]:
+    """Convert a Biopython structure into backbone records.
+
+    Args:
+        structure: Biopython structure object (PDB or MMCIF).
+        path: Original file path.
+        length_cap: Maximum number of residues retained per chain.
+        chain_id: Optional filter restricting which chains are returned.
+
+    Returns:
+        List of :class:`BackboneRecord` instances constructed from ``structure``.
+    """
     records: List[BackboneRecord] = []
 
     for model in structure:
@@ -264,7 +347,11 @@ def _build_records_from_biopython_structure(
             if chain_id is not None and chain_name != chain_id:
                 continue
 
-            residues = [res for res in chain if res.id[0] == " " and res.resname.upper() in CANONICAL_RESIDUES]
+            residues = [
+                res
+                for res in chain
+                if res.id[0] == " " and res.resname.upper() in CANONICAL_RESIDUES
+            ]
             if not residues:
                 continue
 
@@ -342,10 +429,25 @@ def _build_records_from_biopython_structure(
 def _load_mmcif_with_biopython(
     path: Path, *, length_cap: int, chain_id: Optional[str]
 ) -> List[BackboneRecord]:
+    """Load an mmCIF file using Biopython parsers.
+
+    Args:
+        path: Path to an mmCIF file.
+        length_cap: Maximum number of residues retained per chain.
+        chain_id: Optional chain filter.
+
+    Returns:
+        List of backbone records produced by Biopython or an empty list if the
+        parser is unavailable.
+    """
     if MMCIFParser is None:
         return []
 
-    parser = MMCIFParser.MMCIFParser(QUIET=True) if hasattr(MMCIFParser, "MMCIFParser") else MMCIFParser(QUIET=True)
+    parser = (
+        MMCIFParser.MMCIFParser(QUIET=True)
+        if hasattr(MMCIFParser, "MMCIFParser")
+        else MMCIFParser(QUIET=True)
+    )
     structure = parser.get_structure("structure", str(path))
     return _build_records_from_biopython_structure(
         structure, path, length_cap=length_cap, chain_id=chain_id
@@ -355,6 +457,17 @@ def _load_mmcif_with_biopython(
 def _load_pdb_with_biopython(
     path: Path, *, length_cap: int, chain_id: Optional[str]
 ) -> List[BackboneRecord]:
+    """Load a PDB file using Biopython parsers.
+
+    Args:
+        path: Path to a PDB file.
+        length_cap: Maximum number of residues retained per chain.
+        chain_id: Optional chain filter.
+
+    Returns:
+        List of backbone records produced by Biopython or an empty list if the
+        parser is unavailable.
+    """
     if PDBParser is None:
         return []
 
@@ -371,18 +484,24 @@ def load_mmcif(
     chain_id: Optional[str] = None,
     length_cap: int = 2048,
 ) -> List[BackboneRecord]:
-    """Load backbone coordinates for all qualifying chains in ``path``.
+    """Load backbone coordinates for all qualifying chains.
 
-    Parameters
-    ----------
-    path:
-        File system path to an mmCIF or PDB file.
-    chain_id:
-        Optional chain identifier.  When provided the returned list only
-        contains the corresponding chain.
-    length_cap:
-        Maximum number of residues to keep.  Chains longer than ``length_cap``
-        are truncated to that length.
+    Args:
+        path: File path to an mmCIF or PDB structure.
+        chain_id: Optional chain identifier to extract; when ``None`` all chains
+            containing canonical residues are returned.
+        length_cap: Maximum number of residues retained per chain. Values ``<=0``
+            disable truncation.
+
+    Returns:
+        List of :class:`BackboneRecord` instances with CA-centred coordinates.
+
+    Raises:
+        FileNotFoundError: If ``path`` does not exist.
+        KeyError: If a specific ``chain_id`` is requested but no records are
+            found across all parsers.
+        Exception: If every parser fails to load the file and at least one
+            raised an exception (the final error is re-raised).
     """
 
     path_obj = Path(path)
@@ -394,7 +513,9 @@ def load_mmcif(
     if format_hint == "pdb":
         loaders.extend(
             [
-                lambda: _load_pdb_with_gemmi(path_obj, length_cap=length_cap, chain_id=chain_id),
+                lambda: _load_pdb_with_gemmi(
+                    path_obj, length_cap=length_cap, chain_id=chain_id
+                ),
                 lambda: _load_pdb_with_biopython(
                     path_obj, length_cap=length_cap, chain_id=chain_id
                 ),
@@ -402,7 +523,9 @@ def load_mmcif(
         )
         loaders.extend(
             [
-                lambda: _load_mmcif_with_gemmi(path_obj, length_cap=length_cap, chain_id=chain_id),
+                lambda: _load_mmcif_with_gemmi(
+                    path_obj, length_cap=length_cap, chain_id=chain_id
+                ),
                 lambda: _load_mmcif_with_biopython(
                     path_obj, length_cap=length_cap, chain_id=chain_id
                 ),
@@ -411,12 +534,18 @@ def load_mmcif(
     else:
         loaders.extend(
             [
-                lambda: _load_mmcif_with_gemmi(path_obj, length_cap=length_cap, chain_id=chain_id),
+                lambda: _load_mmcif_with_gemmi(
+                    path_obj, length_cap=length_cap, chain_id=chain_id
+                ),
                 lambda: _load_mmcif_with_biopython(
                     path_obj, length_cap=length_cap, chain_id=chain_id
                 ),
-                lambda: _load_pdb_with_gemmi(path_obj, length_cap=length_cap, chain_id=chain_id),
-                lambda: _load_pdb_with_biopython(path_obj, length_cap=length_cap, chain_id=chain_id),
+                lambda: _load_pdb_with_gemmi(
+                    path_obj, length_cap=length_cap, chain_id=chain_id
+                ),
+                lambda: _load_pdb_with_biopython(
+                    path_obj, length_cap=length_cap, chain_id=chain_id
+                ),
             ]
         )
 
@@ -427,7 +556,9 @@ def load_mmcif(
         try:
             candidate = loader()
             any_loader_completed = True
-        except Exception as exc:  # pragma: no cover - parser errors fall back to other loaders
+        except (
+            Exception
+        ) as exc:  # pragma: no cover - parser errors fall back to other loaders
             errors.append(exc)
             continue
         if candidate:
@@ -444,7 +575,18 @@ def load_mmcif(
 
 
 def write_mmcif(record: BackboneRecord, path: str) -> None:
-    """Serialise a :class:`BackboneRecord` back to an mmCIF or PDB file."""
+    """Serialise a backbone record back to an mmCIF or PDB file.
+
+    Args:
+        record: Backbone chain to write. Coordinates are re-applied with the
+            stored rigid transform before writing.
+        path: Destination file path. ``.gz`` suffixes result in gzip-compressed
+            output.
+
+    Raises:
+        RuntimeError: If Gemmi is not installed.
+        ValueError: If the record has no valid residues to write.
+    """
 
     if gemmi is None:
         raise RuntimeError("Writing mmCIF files requires the gemmi package")
@@ -465,10 +607,14 @@ def write_mmcif(record: BackboneRecord, path: str) -> None:
     chain = gemmi.Chain(record.chain_id or "A")
 
     for idx in range(record.length):
-        if not record.mask[idx] or (record.nan_mask[idx] if record.nan_mask.numel() else False):
+        if not record.mask[idx] or (
+            record.nan_mask[idx] if record.nan_mask.numel() else False
+        ):
             continue
         residue = gemmi.Residue()
-        residue.name = record.residue_names[idx] if idx < len(record.residue_names) else "UNK"
+        residue.name = (
+            record.residue_names[idx] if idx < len(record.residue_names) else "UNK"
+        )
         seq_num, seq_icode = (
             record.residue_ids[idx] if idx < len(record.residue_ids) else (idx + 1, "")
         )

@@ -25,12 +25,22 @@ class ScalarVector:
     vectors: Tensor
 
     def clone(self) -> "ScalarVector":
+        """Return a detached copy of the feature pair."""
         return ScalarVector(self.scalars.clone(), self.vectors.clone())
 
     def to(self, *args, **kwargs) -> "ScalarVector":
+        """Move features to the specified device/dtype."""
         return ScalarVector(self.scalars.to(*args, **kwargs), self.vectors.to(*args, **kwargs))
 
     def apply_mask(self, mask: Tensor) -> "ScalarVector":
+        """Apply a boolean mask to the scalar and vector channels.
+
+        Args:
+            mask: 1D tensor selecting valid nodes.
+
+        Returns:
+            Masked ``ScalarVector`` instance.
+        """
         if mask.ndim != 1:
             raise ValueError("Mask must be a 1D tensor")
         scalars = self.scalars * mask.unsqueeze(-1).to(self.scalars.dtype)
@@ -38,9 +48,11 @@ class ScalarVector:
         return ScalarVector(scalars, vectors)
 
     def detach(self) -> "ScalarVector":
+        """Detach both components from the computational graph."""
         return ScalarVector(self.scalars.detach(), self.vectors.detach())
 
     def cat(self, other: "ScalarVector") -> "ScalarVector":
+        """Concatenate two feature tuples along their channel dimensions."""
         scalars = torch.cat((self.scalars, other.scalars), dim=-1)
         vectors = torch.cat((self.vectors, other.vectors), dim=-2)
         return ScalarVector(scalars, vectors)
@@ -55,6 +67,7 @@ class VectorDropout(nn.Module):
         self.enabled = enabled and self.p > 0.0
 
     def forward(self, vectors: Tensor) -> Tensor:
+        """Apply shared dropout mask across vector components."""
         if not self.enabled or self.p <= 0.0 or not self.training:
             return vectors
         if vectors.numel() == 0:
@@ -77,6 +90,7 @@ class VectorLayerNorm(nn.Module):
         self.weight = nn.Parameter(torch.ones(num_channels))
 
     def forward(self, vectors: Tensor) -> Tensor:
+        """Normalise vector magnitudes channel-wise."""
         if vectors.size(-1) != 3:
             raise ValueError("VectorLayerNorm expects (..., C, 3) tensors")
 
@@ -112,6 +126,7 @@ class GCPLayerNorm(nn.Module):
         )
 
     def forward(self, features: ScalarVector) -> ScalarVector:
+        """Normalise scalar and vector features independently."""
         scalars = features.scalars
         vectors = features.vectors
         scalar_dtype = scalars.dtype
@@ -141,6 +156,7 @@ class GCPDropout(nn.Module):
         self.vector_dropout = VectorDropout(p, enabled=drop_vectors and p > 0.0) if drop_vectors else None
 
     def forward(self, features: ScalarVector) -> ScalarVector:
+        """Apply dropout to scalar and vector channels."""
         scalars = features.scalars
         vectors = features.vectors
         if self.scalar_dropout is not None:
@@ -154,6 +170,7 @@ class IdentityGCPDropout(nn.Module):
     """No-op replacement for :class:`GCPDropout`."""
 
     def forward(self, features: ScalarVector) -> ScalarVector:  # pragma: no cover - simple passthrough
+        """Return features unchanged."""
         return features
 
 
@@ -166,6 +183,7 @@ class StandardGCPDropout(nn.Module):
         self.vector = nn.Dropout(p) if p > 0.0 else None
 
     def forward(self, features: ScalarVector) -> ScalarVector:
+        """Apply independent dropout masks to scalar and vector channels."""
         scalars = features.scalars
         vectors = features.vectors
         if self.scalar is not None:
@@ -181,6 +199,7 @@ class GCPEmbedding(nn.Module):
     """Project raw node and edge features to the working feature spaces."""
 
     def __init__(self, config: "GCPNetConfig") -> None:
+        """Initialise embedding projections based on ``config``."""
         super().__init__()
 
         self.config = config
@@ -225,6 +244,7 @@ class GCPEmbedding(nn.Module):
         )
 
     def _gaussian_rbf(self, distances: Tensor) -> Tensor:
+        """Expand pairwise distances using Gaussian radial basis functions."""
         diff = distances.unsqueeze(-1) - self.rbf_centres.to(distances.dtype)
         return torch.exp(-0.5 * (diff / self.rbf_sigma) ** 2)
 
@@ -238,6 +258,7 @@ class GCPEmbedding(nn.Module):
         positions: Tensor,
         mask: Optional[Tensor] = None,
     ) -> Tuple[ScalarVector, ScalarVector]:
+        """Embed node and edge features into scalar/vector channels."""
         node_scalar_dtype = self.node_scalar_proj.weight.dtype
         projected_scalars = self.node_scalar_proj(node_scalars.to(node_scalar_dtype)).to(node_scalars.dtype)
         projected_vectors = vector_linear(node_vectors, self.node_vector_proj).to(node_vectors.dtype)
@@ -367,6 +388,7 @@ class GCPConv(nn.Module):
         edge_frames: Tensor,
         mask: Optional[Tensor] = None,
     ) -> ScalarVector:
+        """Perform a message-passing update on scalar/vector node features."""
         if nodes.scalars.shape[0] != nodes.vectors.shape[0]:
             raise ValueError("Scalar and vector node features must align")
 
@@ -578,6 +600,7 @@ class GCPMessagePassing(nn.Module):
         device: torch.device,
         mask: Optional[Tensor],
     ) -> torch.Tensor:
+        """Construct a (possibly masked) sparse adjacency matrix."""
         src, dst = edge_index
         values = torch.ones(src.numel(), dtype=dtype, device=device)
         if mask is not None:
@@ -589,6 +612,7 @@ class GCPMessagePassing(nn.Module):
         return adjacency.coalesce()
 
     def _aggregate(self, features: ScalarVector, edge_index: Tensor, mask: Optional[Tensor]) -> ScalarVector:
+        """Aggregate neighbour features using the configured pooling strategy."""
         num_nodes = features.scalars.shape[0]
         device = features.scalars.device
         dtype = features.scalars.dtype
@@ -627,6 +651,7 @@ class GCPMessagePassing(nn.Module):
         edge_frames: Tensor,
         mask: Optional[Tensor] = None,
     ) -> Tuple[ScalarVector, ScalarVector]:
+        """Run the message-passing stack and return updated plus pooled features."""
         updated = features
         for layer in self.layers:
             updated = layer(updated, edges, edge_index, edge_frames, mask=mask)
@@ -883,6 +908,7 @@ class GCPInteractions(nn.Module):
         mask: Optional[Tensor] = None,
         skip: Optional[ScalarVector] = None,
     ) -> Tuple[ScalarVector, ScalarVector, Optional[Tensor]]:
+        """Apply one residual interaction block comprising message passing and MLP."""
         x = features
         if self.prenorm_layer is not None:
             x = self.prenorm_layer(features)
@@ -936,6 +962,7 @@ class GCPNetEncoder(nn.Module):
     """Stack of GCP interaction layers with scalar/vector read-out."""
 
     def __init__(self, config: Optional[GCPNetConfig] = None) -> None:
+        """Initialise the encoder and supporting projections."""
         super().__init__()
 
         self.config = config or GCPNetConfig()
@@ -989,6 +1016,7 @@ class GCPNetEncoder(nn.Module):
         batch: ProteinBatch,
         mask: Optional[Tensor],
     ) -> Tuple[EdgeStorage, Tensor]:
+        """Ensure edge frames are populated and return the primary edge storage."""
         if isinstance(batch.e, dict):
             knn_keys = [name for name in batch.e if name.startswith("knn")]
             if len(knn_keys) != 1:
@@ -1013,6 +1041,7 @@ class GCPNetEncoder(nn.Module):
     def forward(
         self, batch: ProteinBatch
     ) -> Dict[str, Union[Tensor, ProteinBatch, Dict[str, EdgeStorage]]]:
+        """Encode a protein batch into node and graph embeddings."""
         if not isinstance(batch, ProteinBatch):
             raise TypeError("GCPNetEncoder.forward expects a ProteinBatch")
 

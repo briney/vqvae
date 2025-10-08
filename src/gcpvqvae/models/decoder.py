@@ -9,12 +9,30 @@ from torch import Tensor, nn
 
 
 def _normalize(vec: Tensor, eps: float = 1e-5) -> Tensor:
+    """Return vectors with unit norm and an ``eps`` floor.
+
+    Args:
+        vec: Tensor whose final dimension stores vector components.
+        eps: Minimum norm to avoid division by zero.
+
+    Returns:
+        Tensor with the same shape as ``vec`` containing unit vectors.
+    """
     norm = torch.linalg.norm(vec, dim=-1, keepdim=True)
     return vec / torch.clamp(norm, min=eps)
 
 
 def _gram_schmidt(vec_a: Tensor, vec_b: Tensor, eps: float = 1e-5) -> Tensor:
-    """Construct an orthonormal frame using Gram–Schmidt orthogonalisation."""
+    """Construct an orthonormal frame using Gram–Schmidt orthogonalisation.
+
+    Args:
+        vec_a: Tensor of shape ``(..., 3)`` providing the first axis.
+        vec_b: Tensor of shape ``(..., 3)`` providing a linearly independent vector.
+        eps: Numerical stability constant for normalisation.
+
+    Returns:
+        Tensor of shape ``(..., 3, 3)`` whose columns form a right-handed frame.
+    """
 
     u1 = _normalize(vec_a, eps)
     proj = (u1 * vec_b).sum(dim=-1, keepdim=True) * u1
@@ -45,6 +63,13 @@ class Dim6RotStructureHead(nn.Module):
         template: Optional[Tensor] = None,
         decoder_output_scaling_factor: float = 1.0,
     ) -> None:
+        """Initialise the rotation decoder.
+
+        Args:
+            in_dim: Dimensionality of the latent features.
+            template: Optional ``(3, 3)`` template containing canonical atom offsets.
+            decoder_output_scaling_factor: Scalar applied to the flattened output.
+        """
         super().__init__()
 
         self.in_dim = in_dim
@@ -73,6 +98,18 @@ class Dim6RotStructureHead(nn.Module):
         params: Tensor,
         mask: Optional[Tensor] = None,
     ) -> Tuple[Tensor, Dict[str, Tensor]]:
+        """Convert raw decoder outputs into coordinates and rigid transforms.
+
+        Args:
+            params: Tensor of shape ``(batch, length, 9)`` containing translation
+                hints and two auxiliary vectors for Gram–Schmidt.
+            mask: Optional boolean tensor ``(batch, length)`` indicating valid residues.
+
+        Returns:
+            Tuple ``(flattened_coords, aux)`` where the first element has shape
+            ``(batch, length, 9)`` and ``aux`` contains rotations, translations, and
+            3D coordinates.
+        """
         if params.ndim != 3 or params.size(-1) != 9:
             raise ValueError("params must have shape (batch, length, 9)")
 
@@ -122,6 +159,15 @@ class Dim6RotStructureHead(nn.Module):
         *,
         mask: Optional[Tensor] = None,
     ) -> Tuple[Tensor, Dict[str, Tensor]]:
+        """Decode latent embeddings into rigid-frame coordinates.
+
+        Args:
+            latents: Tensor of shape ``(batch, length, in_dim)`` with latent embeddings.
+            mask: Optional boolean tensor marking valid residues.
+
+        Returns:
+            Tuple ``(flattened_coords, aux)`` mirroring :meth:`_decode_params`.
+        """
         if latents.ndim != 3 or latents.size(-1) != self.in_dim:
             raise ValueError("latents must have shape (batch, length, in_dim)")
 

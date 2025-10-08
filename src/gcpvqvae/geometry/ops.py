@@ -35,6 +35,18 @@ _IDENTITY_CACHE = {}
 
 
 def _scatter_count(index: Tensor, *, dim_size: int, device: torch.device, dtype: torch.dtype) -> Tensor:
+    """Count occurrences for each index value.
+
+    Args:
+        index: Tensor of shape ``(N,)`` with graph identifiers.
+        dim_size: Total number of graphs.
+        device: Target device for the counts tensor.
+        dtype: Floating-point dtype used for the counts.
+
+    Returns:
+        Tensor of shape ``(dim_size, 1)`` containing counts per graph, clamped
+        to ``>= 1`` to avoid division by zero.
+    """
     ones = torch.ones((index.shape[0], 1), dtype=dtype, device=device)
     counts = scatter_sum(ones, index, dim=0, dim_size=dim_size)
     return torch.clamp(counts, min=1.0)
@@ -46,7 +58,21 @@ def centralize(
     *,
     mask: Optional[Tensor] = None,
 ) -> Tuple[Tensor, Tensor]:
-    """Return centralised coordinates and per-graph centroids."""
+    """Return centralised coordinates and per-graph centroids.
+
+    Args:
+        positions: Tensor of shape ``(N, 3)`` containing node coordinates.
+        batch: Tensor of shape ``(N,)`` assigning each node to a graph.
+        mask: Optional boolean tensor ``(N,)`` selecting nodes used for centroid
+            computation.
+
+    Returns:
+        Tuple ``(centered, centroids)`` where ``centered`` has shape ``(N, 3)``
+        and ``centroids`` has shape ``(G, 3)``.
+
+    Raises:
+        ValueError: If tensor shapes are incompatible.
+    """
 
     if positions.ndim != 2 or positions.size(-1) != 3:
         raise ValueError("positions must have shape (N, 3)")
@@ -76,7 +102,19 @@ def centralize(
 
 
 def decentralize(positions: Tensor, centroids: Tensor, batch: Tensor) -> Tensor:
-    """Undo :func:`centralize` for a subset of nodes."""
+    """Undo :func:`centralize` for a subset of nodes.
+
+    Args:
+        positions: Tensor of shape ``(N, 3)`` containing centred coordinates.
+        centroids: Tensor of shape ``(G, 3)`` storing per-graph centroids.
+        batch: Tensor assigning each node to a centroid.
+
+    Returns:
+        Tensor of shape ``(N, 3)`` with coordinates translated back.
+
+    Raises:
+        ValueError: If tensor shapes are incompatible.
+    """
 
     if positions.ndim != 2 or positions.size(-1) != 3:
         raise ValueError("positions must have shape (N, 3)")
@@ -87,7 +125,20 @@ def decentralize(positions: Tensor, centroids: Tensor, batch: Tensor) -> Tensor:
 
 
 def localize(vectors: Tensor, frames: Tensor) -> Tensor:
-    """Express ``vectors`` in the coordinate system defined by ``frames``."""
+    """Express ``vectors`` in the coordinate system defined by ``frames``.
+
+    Args:
+        vectors: Tensor of shape ``(E, 3)`` or ``(E, C, 3)`` containing vectors
+            to transform.
+        frames: Tensor of shape ``(E, 3, 3)`` containing rotation matrices.
+
+    Returns:
+        Tensor matching the shape of ``vectors`` with coordinates expressed in
+        the local frames.
+
+    Raises:
+        ValueError: If the input shapes are incompatible.
+    """
 
     if frames.ndim != 3 or frames.shape[-2:] != (3, 3):
         raise ValueError("frames must have shape (E, 3, 3)")
@@ -103,6 +154,16 @@ def localize(vectors: Tensor, frames: Tensor) -> Tensor:
 
 
 def _cached_identity(count: int, device: torch.device, dtype: torch.dtype) -> Tensor:
+    """Return cached batches of identity matrices to avoid reallocations.
+
+    Args:
+        count: Number of frames requested.
+        device: Device on which tensors should reside.
+        dtype: Floating-point dtype for the identity matrices.
+
+    Returns:
+        Tensor of shape ``(count, 3, 3)`` containing batched identity matrices.
+    """
     key = (device, dtype)
     cached = _IDENTITY_CACHE.get(key)
     if cached is None or cached.shape[0] < count:
@@ -120,7 +181,22 @@ def ensure_edge_frames(
     node_batch: Optional[Tensor] = None,
     mask: Optional[Tensor] = None,
 ) -> Tensor:
-    """Return rotation frames for each edge, computing them lazily if needed."""
+    """Return rotation frames for each edge, computing them lazily if needed.
+
+    Args:
+        positions: Tensor of shape ``(N, 3)`` containing node coordinates.
+        edge_index: Tensor of shape ``(2, E)`` describing directed edges.
+        edge_batch: Optional tensor ``(E,)`` mapping edges to graphs.
+        node_batch: Optional tensor ``(N,)`` mapping nodes to graphs. Required
+            when ``positions`` is empty.
+        mask: Optional boolean tensor ``(N,)`` indicating valid nodes.
+
+    Returns:
+        Tensor of shape ``(E, 3, 3)`` containing rotation frames.
+
+    Raises:
+        ValueError: If inputs have incompatible shapes.
+    """
 
     if edge_index.ndim != 2 or edge_index.size(0) != 2:
         raise ValueError("edge_index must have shape (2, E)")
@@ -163,4 +239,3 @@ def ensure_edge_frames(
 
 
 __all__ = ["centralize", "decentralize", "localize", "ensure_edge_frames"]
-

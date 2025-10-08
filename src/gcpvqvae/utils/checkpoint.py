@@ -9,7 +9,12 @@ import torch
 
 
 def save_checkpoint(state: dict[str, Any], path: str | Path) -> None:
-    """Persist ``state`` to ``path`` creating parent directories as needed."""
+    """Persist ``state`` to ``path`` creating parent directories as needed.
+
+    Args:
+        state: Serializable mapping containing the checkpoint payload.
+        path: Destination file path; parent directories are created on demand.
+    """
 
     path_obj = Path(path)
     path_obj.parent.mkdir(parents=True, exist_ok=True)
@@ -21,7 +26,15 @@ def load_checkpoint(
     *,
     map_location: Optional[str | torch.device] = None,
 ) -> dict[str, Any]:
-    """Load and return a previously saved training state."""
+    """Load and return a previously saved training state.
+
+    Args:
+        path: Checkpoint file to load.
+        map_location: Optional map location forwarded to :func:`torch.load`.
+
+    Returns:
+        Deserialised checkpoint dictionary.
+    """
 
     # ``torch.load`` defaulted ``weights_only`` to ``False`` prior to PyTorch 2.6,
     # which allowed arbitrary Python objects (such as OmegaConf ``DictConfig``

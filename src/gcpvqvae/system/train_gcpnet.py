@@ -78,25 +78,30 @@ class MetricTracker:
     """Utility tracking weighted averages for streaming metrics."""
 
     def __init__(self) -> None:
+        """Initialise an empty tracker."""
         self.total = 0.0
         self.weight = 0.0
 
     def update(self, value: float, weight: float = 1.0) -> None:
+        """Accumulate a value with an optional weight."""
         self.total += value * weight
         self.weight += weight
 
     def reset(self) -> None:
+        """Reset accumulated totals."""
         self.total = 0.0
         self.weight = 0.0
 
     @property
     def average(self) -> float:
+        """Return the weighted average or ``0.0`` when empty."""
         if self.weight == 0:
             return 0.0
         return self.total / self.weight
 
 
 def _load_config(path: str | Path) -> Dict[str, Any]:
+    """Load a YAML pretraining configuration from disk."""
     with open(path, "r", encoding="utf-8") as handle:
         config = yaml.safe_load(handle)
     if not isinstance(config, dict):
@@ -105,12 +110,14 @@ def _load_config(path: str | Path) -> Dict[str, Any]:
 
 
 def _coerce_config(config: Mapping[str, Any] | str | Path) -> Dict[str, Any]:
+    """Return a configuration mapping regardless of input type."""
     if isinstance(config, Mapping):
         return dict(config)
     return _load_config(config)
 
 
 def _prepare_data_config(raw: Mapping[str, Any]) -> PretrainDataConfig:
+    """Construct :class:`PretrainDataConfig` from raw dictionary input."""
     if "root" not in raw or raw["root"] is None:
         raise ValueError("data.root must be provided for GCPNet pretraining")
 
@@ -135,6 +142,7 @@ def _prepare_data_config(raw: Mapping[str, Any]) -> PretrainDataConfig:
 
 
 def _prepare_model_config(raw: Mapping[str, Any]) -> PretrainModelConfig:
+    """Construct :class:`PretrainModelConfig` from raw overrides."""
     config = PretrainModelConfig()
     for key, value in raw.items():
         if not hasattr(config, key):
@@ -150,6 +158,7 @@ def _prepare_model_config(raw: Mapping[str, Any]) -> PretrainModelConfig:
 
 
 def _prepare_train_config(raw: Mapping[str, Any]) -> PretrainTrainConfig:
+    """Construct :class:`PretrainTrainConfig` from raw overrides."""
     data = dict(raw)
     cfg = PretrainTrainConfig(
         seed=int(data.get("seed", 42)),
@@ -176,6 +185,7 @@ def _prepare_train_config(raw: Mapping[str, Any]) -> PretrainTrainConfig:
 
 
 def _random_rotation(device: torch.device, dtype: torch.dtype) -> Tensor:
+    """Sample a random SO(3) rotation matrix."""
     mat = torch.randn((3, 3), device=device, dtype=dtype)
     q, r = torch.linalg.qr(mat)
     diag = torch.diagonal(r)
@@ -187,6 +197,7 @@ def _random_rotation(device: torch.device, dtype: torch.dtype) -> Tensor:
 
 
 def _apply_random_rotation(batch: Dict[str, Tensor]) -> None:
+    """Apply identical random rotations to coordinates and vectors per sample."""
     coords = batch.get("coords")
     node_vectors = batch.get("node_vectors")
     edge_vectors = batch.get("edge_vectors")
@@ -218,6 +229,7 @@ def _apply_random_rotation(batch: Dict[str, Tensor]) -> None:
 
 
 def _move_batch_to_device(batch: Dict[str, Any], device: torch.device) -> Dict[str, Any]:
+    """Move all tensor values in ``batch`` to the specified device."""
     for key, value in batch.items():
         if isinstance(value, torch.Tensor):
             batch[key] = value.to(device)
@@ -225,7 +237,10 @@ def _move_batch_to_device(batch: Dict[str, Any], device: torch.device) -> Dict[s
 
 
 class GCPNetPretrainModule(nn.Module):
+    """Wrapper combining the GCP encoder with the rotation reconstruction head."""
+
     def __init__(self, config: PretrainModelConfig) -> None:
+        """Initialise encoder and rotation head modules."""
         super().__init__()
         self.encoder = GCPNetEncoder(config.gcp)
         self.rotation = Dim6RotStructureHead(
@@ -235,6 +250,15 @@ class GCPNetPretrainModule(nn.Module):
         )
 
     def forward(self, batch: Dict[str, Tensor]) -> Dict[str, Tensor]:
+        """Encode backbone features and reconstruct coordinates.
+
+        Args:
+            batch: Mapping containing collated backbone tensors.
+
+        Returns:
+            Dictionary with total loss, reconstruction components, predicted
+            coordinates, and pose data.
+        """
         mask = batch["mask"].to(torch.bool)
         if "nan_mask" in batch:
             mask = mask & ~batch["nan_mask"].to(torch.bool)
@@ -270,7 +294,10 @@ class GCPNetPretrainModule(nn.Module):
 
 
 class GCPNetPretrainer:
+    """Training loop for the standalone GCPNet encoder plus rotation head."""
+
     def __init__(self, config: Mapping[str, Any] | str | Path) -> None:
+        """Initialise the pretrainer from a configuration mapping or path."""
         raw = _coerce_config(config)
         self._raw_config = raw
         self.data_cfg = _prepare_data_config(raw.get("data", {}))
@@ -304,6 +331,7 @@ class GCPNetPretrainer:
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     def _build_dataloader(self) -> DataLoader:
+        """Construct the training dataloader."""
         dataset = BackboneDataset(
             self.data_cfg.root,
             chain_ids=self.data_cfg.chain_ids,
@@ -325,6 +353,7 @@ class GCPNetPretrainer:
         )
 
     def _save_checkpoint(self, name: str, global_step: int, epoch: int) -> None:
+        """Persist encoder, head, and optimiser state to disk."""
         path = self.checkpoint_dir / name
         state = {
             "epoch": epoch,
@@ -339,6 +368,7 @@ class GCPNetPretrainer:
         self.logger.info("Saved checkpoint to %s", path)
 
     def run(self) -> None:
+        """Execute pretraining with gradient accumulation and logging."""
         dataloader = self._build_dataloader()
         batches_per_epoch = len(dataloader)
         if batches_per_epoch == 0:
@@ -487,11 +517,14 @@ class GCPNetPretrainer:
 
 
 def train(config: Mapping[str, Any] | str | Path) -> None:
-    """Entry point mirroring :func:`gcpvqvae.system.train.train`."""
+    """Run GCPNet pretraining using the provided configuration.
+
+    Args:
+        config: Mapping or path with ``data``, ``model``, and ``train`` sections.
+    """
 
     trainer = GCPNetPretrainer(config)
     trainer.run()
 
 
 __all__ = ["train", "GCPNetPretrainer"]
-

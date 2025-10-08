@@ -27,6 +27,7 @@ class EdgeStorage:
     name: str = "knn_k"
 
     def clone(self) -> "EdgeStorage":
+        """Return a detached copy of the edge storage."""
         frames = None if self.frames is None else self.frames.clone()
         batch = None if self.batch is None else self.batch.clone()
         return EdgeStorage(
@@ -43,6 +44,15 @@ class EdgeStorage:
         device: Optional[torch.device] = None,
         dtype: Optional[torch.dtype] = None,
     ) -> "EdgeStorage":
+        """Move the edge storage tensors to a target device/dtype.
+
+        Args:
+            device: Torch device to move tensors to.
+            dtype: Optional floating-point dtype applied to scalar/vector fields.
+
+        Returns:
+            New :class:`EdgeStorage` residing on the requested device/dtype.
+        """
         kwargs = {"device": device}
         if dtype is not None and self.scalars.dtype.is_floating_point:
             kwargs["dtype"] = dtype
@@ -80,6 +90,18 @@ class ProteinBatch(_PyGBatch):
         mask: Optional[Tensor] = None,
         **extras: Tensor,
     ) -> None:
+        """Initialise a batched graph compatible with GCPNet.
+
+        Args:
+            h: Node scalar features of shape ``(N, F_h)``.
+            chi: Node vector features of shape ``(N, 3, 3)``.
+            e: Mapping of edge storages or a single :class:`EdgeStorage`.
+            xi: Node coordinate tensor of shape ``(N, 3)``.
+            batch: Batch assignment per node matching PyG semantics.
+            ptr: Pointer offsets delimiting individual graphs.
+            mask: Optional boolean mask for valid nodes.
+            **extras: Additional tensors copied onto the batch instance.
+        """
         super().__init__()  # type: ignore[misc]
         self.h = h
         self.chi = chi
@@ -98,17 +120,21 @@ class ProteinBatch(_PyGBatch):
 
     # ------------------------------------------------------------------ helpers
     def num_graphs(self) -> int:
+        """Return the number of graphs represented by the batch."""
         return int(self.ptr.numel() - 1)
 
     def __len__(self) -> int:  # pragma: no cover - compatibility shim
+        """Return the number of nodes in the batch."""
         return self.h.shape[0]
 
     def items(self) -> Iterable[tuple[str, Tensor]]:  # pragma: no cover - shim
+        """Iterate over tensor-valued attributes stored on the batch."""
         for key, value in self.__dict__.items():
             if isinstance(value, Tensor):
                 yield key, value
 
     def clone(self) -> "ProteinBatch":
+        """Return a detached copy of the batch and its edge storages."""
         edges = {name: storage.clone() for name, storage in self.e.items()}
         mask = None if self.mask is None else self.mask.clone()
         extras: Dict[str, Tensor] = {}
@@ -139,6 +165,15 @@ class ProteinBatch(_PyGBatch):
         device: Optional[torch.device] = None,
         dtype: Optional[torch.dtype] = None,
     ) -> "ProteinBatch":
+        """Move batch tensors to the requested device and dtype.
+
+        Args:
+            device: Destination device for tensor data.
+            dtype: Optional floating-point dtype applied to relevant tensors.
+
+        Returns:
+            New :class:`ProteinBatch` instance residing on the target device.
+        """
         kwargs = {"device": device}
         if dtype is not None and self.h.dtype.is_floating_point:
             kwargs["dtype"] = dtype
@@ -186,7 +221,30 @@ def protein_batch_from_graph_dict(
     *,
     relation_name: str = "knn_k",
 ) -> ProteinBatch:
-    """Construct a :class:`ProteinBatch` from a collated mini-batch."""
+    """Construct a :class:`ProteinBatch` from a collated mini-batch.
+
+    Args:
+        batch: Dictionary emitted by :func:`gcpvqvae.data.dataset.collate_backbones`.
+            Required keys include ``node_scalars`` with shape ``(B, L, F)``,
+            ``node_vectors`` with shape ``(B, L, 3, 3)``, ``coords`` with shape
+            ``(B, L, 3, 3)``, and ``edge_index``.
+        relation_name: Edge relation label used to store the resulting
+            :class:`EdgeStorage`.
+
+    Returns:
+        :class:`ProteinBatch` where node tensors have been flattened to ``(N, …)``
+        using the validity mask and PyG bookkeeping tensors are derived from the
+        masked lengths.
+
+    Raises:
+        KeyError: If required tensors are missing from ``batch``.
+
+    Examples:
+        >>> collated = collate_backbones([dataset[0], dataset[1]])
+        >>> protein_batch = protein_batch_from_graph_dict(collated)
+        >>> protein_batch.h.shape
+        torch.Size([int(protein_batch.lengths.sum()), collated["node_scalars"].shape[-1]])
+    """
 
     if "node_scalars" not in batch or "node_vectors" not in batch:
         raise KeyError("Batch dictionary must contain node features")
@@ -307,4 +365,3 @@ def protein_batch_from_graph_dict(
 
 
 __all__ = ["EdgeStorage", "ProteinBatch", "protein_batch_from_graph_dict"]
-

@@ -51,6 +51,7 @@ class ValidationReport:
 
 
 def _load_yaml(path: Path) -> Dict[str, Any]:
+    """Read a YAML file and ensure it contains a mapping at the root."""
     with open(path, "r", encoding="utf-8") as handle:
         raw = yaml.safe_load(handle)
     if not isinstance(raw, dict):
@@ -59,6 +60,7 @@ def _load_yaml(path: Path) -> Dict[str, Any]:
 
 
 def _get_nested(mapping: Optional[Dict[str, Any]], *keys: str) -> Any:
+    """Safely traverse ``mapping`` using ``keys`` returning ``None`` on failure."""
     current: Any = mapping
     for key in keys:
         if not isinstance(current, dict) or key not in current:
@@ -68,6 +70,7 @@ def _get_nested(mapping: Optional[Dict[str, Any]], *keys: str) -> Any:
 
 
 def _ensure_positive(value: Any, path: str, issues: List[ValidationIssue]) -> None:
+    """Record an error if ``value`` is non-positive."""
     if value is None:
         return
     if isinstance(value, (int, float)) and value <= 0:
@@ -75,6 +78,7 @@ def _ensure_positive(value: Any, path: str, issues: List[ValidationIssue]) -> No
 
 
 def _ensure_non_negative(value: Any, path: str, issues: List[ValidationIssue]) -> None:
+    """Record an error if ``value`` is negative."""
     if value is None:
         return
     if isinstance(value, (int, float)) and value < 0:
@@ -82,6 +86,7 @@ def _ensure_non_negative(value: Any, path: str, issues: List[ValidationIssue]) -
 
 
 def _check_model_consistency(raw_model: Optional[Dict[str, Any]]) -> List[ValidationIssue]:
+    """Validate cross-field consistency constraints of the model section."""
     issues: List[ValidationIssue] = []
 
     latent_dim = _get_nested(raw_model, "gcp", "latent_dim")
@@ -200,6 +205,16 @@ def _check_model_consistency(raw_model: Optional[Dict[str, Any]]) -> List[Valida
 
 
 def _summarise_training(raw_train: Optional[Dict[str, Any]]) -> Tuple[Optional[TrainingSummary], List[ValidationIssue]]:
+    """Parse the ``train`` section and collect stage summaries.
+
+    Args:
+        raw_train: Raw ``train`` mapping from the configuration.
+
+    Returns:
+        Tuple ``(summary, issues)`` where ``summary`` is a
+        :class:`TrainingSummary` or ``None`` if parsing failed, and ``issues`` is
+        a list of validation problems.
+    """
     if not isinstance(raw_train, dict):
         if raw_train is None:
             return None, []
@@ -270,6 +285,16 @@ def _summarise_training(raw_train: Optional[Dict[str, Any]]) -> Tuple[Optional[T
 
 
 def _build_model_summary(config: GCPVQVAEConfig) -> Tuple[Optional[ModelSummary], List[ValidationIssue]]:
+    """Instantiate the model to collect parameter counts.
+
+    Args:
+        config: Fully resolved :class:`GCPVQVAEConfig`.
+
+    Returns:
+        Tuple ``(summary, issues)`` where ``summary`` aggregates parameter
+        counts (or ``None`` on failure) and ``issues`` records instantiation
+        errors.
+    """
     try:
         model = GCPVQVAE(config)
     except Exception as exc:  # pragma: no cover - exercised in validation tests
@@ -301,7 +326,14 @@ def _build_model_summary(config: GCPVQVAEConfig) -> Tuple[Optional[ModelSummary]
 
 
 def validate_config(config: Mapping[str, Any] | str | Path) -> ValidationReport:
-    """Validate a configuration mapping or file and collect statistics."""
+    """Validate a configuration mapping or file and collect statistics.
+
+    Args:
+        config: Dictionary or path to a YAML file describing the experiment.
+
+    Returns:
+        :class:`ValidationReport` summarising discovered issues and key metrics.
+    """
 
     if isinstance(config, Mapping):
         raw = dict(config)
@@ -337,7 +369,14 @@ def validate_config(config: Mapping[str, Any] | str | Path) -> ValidationReport:
 
 
 def format_report(report: ValidationReport) -> str:
-    """Format a :class:`ValidationReport` into a human readable summary."""
+    """Format a :class:`ValidationReport` into a human readable summary.
+
+    Args:
+        report: Validation report returned by :func:`validate_config`.
+
+    Returns:
+        Multi-line string containing a concise summary.
+    """
 
     lines: List[str] = []
     status = "VALID" if report.valid else "INVALID"
@@ -404,4 +443,3 @@ __all__ = [
     "validate_config",
     "format_report",
 ]
-

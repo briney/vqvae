@@ -25,18 +25,23 @@ else:  # pragma: no cover - fallback when tqdm is unavailable
 
     class _NullTqdm:
         def __init__(self, *args: Any, **kwargs: Any) -> None:
+            """Construct a placeholder progress bar that ignores arguments."""
             pass
 
         def __enter__(self) -> "_NullTqdm":
+            """Enter the context manager returning ``self``."""
             return self
 
         def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
+            """Exit the context manager without swallowing exceptions."""
             return False
 
         def update(self, *_: Any, **__: Any) -> None:
+            """Ignore progress updates."""
             pass
 
     def tqdm(*args: Any, **kwargs: Any) -> _NullTqdm:
+        """Fallback ``tqdm`` factory returning a no-op progress bar."""
         return _NullTqdm()
 
 from gcpvqvae.data.dataset import BackboneDataset, collate_backbones
@@ -78,6 +83,18 @@ class StageConfig:
     nan_mask_span: Tuple[int, int] = (1, 1)
 
     def effective_total_steps(self, batches_per_epoch: int) -> int:
+        """Return the number of optimiser steps this stage should execute.
+
+        Args:
+            batches_per_epoch: Number of mini-batches yielding gradients per epoch.
+
+        Returns:
+            Total number of optimisation steps accounting for accumulation.
+
+        Raises:
+            ValueError: If neither ``total_steps`` nor ``epochs`` is provided, or
+                when the dataset is empty.
+        """
         if self.total_steps is not None:
             return self.total_steps
         if self.epochs is None:
@@ -145,19 +162,28 @@ class MetricTracker:
     """Utility tracking running averages for logging."""
 
     def __init__(self) -> None:
+        """Initialise the tracker with empty totals."""
         self.total = 0.0
         self.count = 0.0
 
     def update(self, value: float, weight: float = 1.0) -> None:
+        """Accumulate a metric value with an optional weight.
+
+        Args:
+            value: Metric value to accumulate.
+            weight: Contribution weight, typically the batch size.
+        """
         self.total += value * weight
         self.count += weight
 
     def reset(self) -> None:
+        """Reset the running totals."""
         self.total = 0.0
         self.count = 0.0
 
     @property
     def average(self) -> float:
+        """Return the weighted average or ``0.0`` when empty."""
         if self.count == 0:
             return 0.0
         return self.total / self.count
@@ -175,6 +201,15 @@ class WarmupCosineScheduler:
         base_lr: float,
         min_lr: float,
     ) -> None:
+        """Initialise the scheduler.
+
+        Args:
+            optimizer: Optimiser whose learning rate is controlled.
+            warmup_steps: Number of warmup steps with linear ramp.
+            total_steps: Total scheduler span in optimisation steps.
+            base_lr: Peak learning rate after warmup.
+            min_lr: Minimum learning rate reached at the end of cosine decay.
+        """
         self.optimizer = optimizer
         self.warmup_steps = max(warmup_steps, 0)
         self.total_steps = max(total_steps, 1)
@@ -184,6 +219,7 @@ class WarmupCosineScheduler:
         self.update(0)
 
     def _lr_at(self, step: int) -> float:
+        """Compute the learning rate at ``step``."""
         step = min(max(step, 0), self.total_steps)
         if self.total_steps <= 0:
             return self.min_lr
@@ -198,16 +234,27 @@ class WarmupCosineScheduler:
         return self.min_lr + (self.base_lr - self.min_lr) * cosine
 
     def update(self, step: int) -> None:
+        """Set the optimizer learning rate for the provided ``step``."""
         lr = self._lr_at(step)
         for group in self.optimizer.param_groups:
             group["lr"] = lr
         self._step = step
 
     def step(self) -> None:
+        """Advance the scheduler by one step."""
         self.update(self._step + 1)
 
 
 def _random_rotation(device: torch.device, dtype: torch.dtype) -> Tensor:
+    """Sample a random SO(3) rotation matrix.
+
+    Args:
+        device: Target device for the rotation.
+        dtype: Floating-point dtype of the returned matrix.
+
+    Returns:
+        Tensor of shape ``(3, 3)`` representing a rotation with determinant +1.
+    """
     mat = torch.randn((3, 3), device=device, dtype=dtype)
     q, r = torch.linalg.qr(mat)
     diag = torch.diagonal(r)
@@ -219,6 +266,12 @@ def _random_rotation(device: torch.device, dtype: torch.dtype) -> Tensor:
 
 
 def _apply_random_rotation(batch: Dict[str, Tensor]) -> None:
+    """Apply identical random rotations to all coordinates and vectors per sample.
+
+    Args:
+        batch: Collated batch dictionary from :func:`collate_backbones`. Modified
+            in-place.
+    """
     coords = batch.get("coords")
     node_vectors = batch.get("node_vectors")
     edge_vectors = batch.get("edge_vectors")
@@ -250,6 +303,13 @@ def _apply_random_rotation(batch: Dict[str, Tensor]) -> None:
 
 
 def _apply_nan_mask(batch: Dict[str, Tensor], prob: float, span: Tuple[int, int]) -> None:
+    """Randomly mask contiguous spans in the ``nan_mask`` tensor.
+
+    Args:
+        batch: Collated batch dictionary modified in-place.
+        prob: Probability of masking a span per sequence.
+        span: Tuple ``(min_span, max_span)`` controlling mask length.
+    """
     if prob <= 0.0:
         return
     nan_mask = batch.get("nan_mask")
@@ -272,6 +332,7 @@ def _apply_nan_mask(batch: Dict[str, Tensor], prob: float, span: Tuple[int, int]
 
 
 def _prepare_stage_config(data: Dict[str, Any]) -> StageConfig:
+    """Coerce a raw dictionary into :class:`StageConfig`."""
     span = data.get("nan_mask_span", (1, 1))
     if isinstance(span, Sequence):
         span_tuple = (int(span[0]), int(span[1]))
@@ -297,6 +358,7 @@ def _prepare_stage_config(data: Dict[str, Any]) -> StageConfig:
 def _prepare_eval_during_training_config(
     raw: Optional[Dict[str, Any]]
 ) -> Optional[EvalDuringTrainingConfig]:
+    """Build an :class:`EvalDuringTrainingConfig` from raw input."""
     if raw is None:
         return None
     if not isinstance(raw, Mapping):
@@ -378,6 +440,7 @@ def _prepare_eval_during_training_config(
 
 
 def _prepare_train_config(raw: Dict[str, Any]) -> TrainConfig:
+    """Convert the ``train`` section into :class:`TrainConfig`."""
     export_cfg = raw.get("export", {})
     every_n = export_cfg.get("every_n_steps")
     export = ExportConfig(
@@ -442,6 +505,7 @@ def _prepare_train_config(raw: Dict[str, Any]) -> TrainConfig:
 
 
 def _prepare_data_config(raw: Dict[str, Any]) -> DataConfig:
+    """Convert the ``data`` section into :class:`DataConfig`."""
     root = raw.get("root")
     if root is None:
         raise ValueError("Data configuration requires a 'root' path")
@@ -465,6 +529,7 @@ def _prepare_data_config(raw: Dict[str, Any]) -> DataConfig:
 
 
 def _load_config(path: str | Path) -> Dict[str, Any]:
+    """Load a YAML training configuration from disk."""
     import yaml
 
     with open(path, "r", encoding="utf-8") as handle:
@@ -475,12 +540,21 @@ def _load_config(path: str | Path) -> Dict[str, Any]:
 
 
 def _coerce_config(config: Mapping[str, Any] | str | Path) -> Dict[str, Any]:
+    """Return a configuration mapping regardless of input type."""
     if isinstance(config, Mapping):
         return dict(config)
     return _load_config(config)
 
 
 def _codebook_statistics(vq: nn.Module) -> Tuple[float, float]:
+    """Return active-code fraction and KL divergence for a quantiser.
+
+    Args:
+        vq: Vector-quantiser module exposing a ``usage`` buffer.
+
+    Returns:
+        Tuple ``(utilisation, kl_divergence)``.
+    """
     if not hasattr(vq, "usage"):
         return 0.0, 0.0
     usage = getattr(vq, "usage").detach().float()
@@ -509,6 +583,17 @@ def _export_samples(
     output_dir: Path,
     logger,
 ) -> None:
+    """Export reconstructed samples to disk according to ``export_cfg``.
+
+    Args:
+        model: Trained model used for reconstruction.
+        dataset: Backbone dataset providing source chains.
+        export_cfg: Export settings controlling frequency and count.
+        stage_name: Current training stage name.
+        global_step: Global optimisation step.
+        output_dir: Base directory for run artefacts.
+        logger: Logger used for status messages.
+    """
     if not export_cfg.enabled:
         return
     if not hasattr(dataset, "_keys") or not dataset._keys:  # type: ignore[attr-defined]
@@ -583,7 +668,14 @@ def _export_samples(
 
 
 class Trainer:
+    """Orchestrates data loading, optimisation, logging, and evaluation."""
+
     def __init__(self, config: Mapping[str, Any] | str | Path) -> None:
+        """Initialise the trainer from a configuration mapping or file.
+
+        Args:
+            config: Mapping or filesystem path describing the experiment.
+        """
         raw = _coerce_config(config)
         self._raw_config = raw
         self.data_cfg = _prepare_data_config(raw.get("data", {}))
@@ -644,6 +736,17 @@ class Trainer:
         residues: int,
         elapsed: float,
     ) -> None:
+        """Log running averages and emit Weights & Biases metrics.
+
+        Args:
+            stage: Active stage configuration.
+            stage_step: Current step within the stage.
+            total_steps: Total number of steps for the stage.
+            trackers: Metric trackers accumulated since the previous log call.
+            samples: Number of processed sequences.
+            residues: Number of processed residues.
+            elapsed: Wall-clock time in seconds since the last log.
+        """
         loss_avg = trackers["loss"].average
         rec_avg = trackers["recon"].average
         rec_total_component = trackers["recon_total_component"].average
@@ -714,6 +817,7 @@ class Trainer:
         self._wandb_log(wandb_metrics)
 
     def _init_wandb(self) -> Optional[Any]:
+        """Initialise a Weights & Biases run when logging is enabled."""
         cfg = self.train_cfg.log
         if not cfg.enabled:
             return None
@@ -753,6 +857,7 @@ class Trainer:
         return run
 
     def _wandb_log(self, data: Dict[str, Any]) -> None:
+        """Send a metrics dictionary to Weights & Biases."""
         if self._wandb_run is None:
             return
         try:
@@ -761,6 +866,7 @@ class Trainer:
             self.logger.warning("Failed to log metrics to Weights & Biases: %s", exc)
 
     def _finish_wandb(self) -> None:
+        """Close the Weights & Biases run if one is active."""
         if self._wandb_run is None:
             return
         try:
@@ -771,6 +877,7 @@ class Trainer:
             self._wandb_run = None
 
     def _save_checkpoint(self, stage: StageConfig) -> None:
+        """Persist the current training state to disk."""
         ckpt_dir = self.output_dir / "checkpoints"
         ckpt_path = ckpt_dir / f"{stage.name}_step{self.global_step:06d}.pt"
         save_checkpoint(
@@ -785,6 +892,7 @@ class Trainer:
         )
 
     def _build_dataloader(self, stage: StageConfig) -> DataLoader:
+        """Construct the training dataloader for ``stage``."""
         dataset = BackboneDataset(
             self.data_cfg.root,
             chain_ids=self.data_cfg.chain_ids,
@@ -805,6 +913,7 @@ class Trainer:
         return loader
 
     def _build_eval_dataloader(self) -> Optional[DataLoader]:
+        """Construct the evaluation dataloader if evaluation is configured."""
         if self.eval_cfg is None or self.eval_cfg.root is None:
             return None
 
@@ -848,6 +957,7 @@ class Trainer:
         return loader
 
     def _get_eval_dataloader(self) -> Optional[DataLoader]:
+        """Return a cached evaluation dataloader, building it lazily."""
         if self._eval_runtime_cfg is None:
             return None
         if self._eval_dataloader is None:
@@ -859,6 +969,7 @@ class Trainer:
         return self._eval_dataloader
 
     def _flatten_metrics(self, prefix: str, data: Mapping[str, Any]) -> Dict[str, Any]:
+        """Flatten nested metric dictionaries into ``prefix/key`` format."""
         flat: Dict[str, Any] = {}
         for key, value in data.items():
             name = f"{prefix}/{key}" if prefix else str(key)
@@ -869,6 +980,7 @@ class Trainer:
         return flat
 
     def _run_eval_if_due(self, stage_name: str) -> None:
+        """Run validation if enough training steps have elapsed."""
         if self.eval_cfg is None or self._eval_runtime_cfg is None:
             return
         interval = self.eval_cfg.interval
@@ -921,6 +1033,7 @@ class Trainer:
         self._wandb_log(wandb_metrics)
 
     def run(self) -> None:
+        """Execute the full training loop across all configured stages."""
         try:
             for stage_idx, stage in enumerate(self.train_cfg.stages):
                 self.logger.info("Starting stage %d: %s", stage_idx + 1, stage.name)
@@ -1169,10 +1282,14 @@ class Trainer:
 
 
 def train(config: Mapping[str, Any] | str | Path) -> None:
-    """Entry point mirroring the public API."""
+    """Run training using the provided configuration.
+
+    Args:
+        config: Mapping or path-like object describing data, model, and training
+            parameters.
+    """
 
     Trainer(config).run()
 
 
 __all__ = ["train", "Trainer"]
-

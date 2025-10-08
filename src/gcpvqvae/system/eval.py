@@ -53,6 +53,7 @@ class EvalModelConfig:
 
 
 def _load_config(path: str | Path) -> Dict[str, Any]:
+    """Load a YAML evaluation configuration from disk."""
     import yaml
 
     with open(path, "r", encoding="utf-8") as handle:
@@ -63,12 +64,14 @@ def _load_config(path: str | Path) -> Dict[str, Any]:
 
 
 def _coerce_config(config: Mapping[str, Any] | str | Path) -> Dict[str, Any]:
+    """Return a configuration mapping regardless of input type."""
     if isinstance(config, Mapping):
         return dict(config)
     return _load_config(config)
 
 
 def _prepare_data_config(raw: Dict[str, Any]) -> EvalDataConfig:
+    """Construct :class:`EvalDataConfig` from raw dictionary input."""
     if not isinstance(raw, dict) or "root" not in raw:
         raise ValueError("data.root must be provided in the evaluation config")
 
@@ -90,6 +93,7 @@ def _prepare_data_config(raw: Dict[str, Any]) -> EvalDataConfig:
 
 
 def _prepare_runtime_config(raw: Dict[str, Any]) -> EvalRuntimeConfig:
+    """Construct :class:`EvalRuntimeConfig` from raw dictionary input."""
     if raw is None:
         raw = {}
     if not isinstance(raw, dict):
@@ -124,6 +128,7 @@ def _prepare_runtime_config(raw: Dict[str, Any]) -> EvalRuntimeConfig:
 
 
 def _prepare_model_config(raw: Dict[str, Any]) -> EvalModelConfig:
+    """Construct :class:`EvalModelConfig` from raw dictionary input."""
     if not isinstance(raw, dict) or "checkpoint" not in raw:
         raise ValueError("model.checkpoint must be provided in the evaluation config")
 
@@ -135,10 +140,12 @@ def _prepare_model_config(raw: Dict[str, Any]) -> EvalModelConfig:
 
 
 def _build_model_config(raw: Optional[Dict[str, Any]]) -> GCPVQVAEConfig:
+    """Wrapper exposing :func:`build_model_config` for consistency."""
     return build_model_config(raw)
 
 
 def _linear_regression(x: Sequence[float], y: Sequence[float]) -> Tuple[float, float]:
+    """Fit a simple linear regression ``y = slope * x + intercept``."""
     if len(x) < 2 or len(y) < 2:
         return float("nan"), float("nan")
 
@@ -158,6 +165,7 @@ def _linear_regression(x: Sequence[float], y: Sequence[float]) -> Tuple[float, f
 
 
 def _distribution_summary(values: Sequence[float], quantiles: Sequence[float], bins: int) -> Dict[str, Any]:
+    """Return descriptive statistics and histogram for ``values``."""
     if not values:
         return {
             "mean": float("nan"),
@@ -190,6 +198,7 @@ def _distribution_summary(values: Sequence[float], quantiles: Sequence[float], b
 
 
 def _log_distribution(logger, name: str, stats: Dict[str, Any]) -> None:
+    """Emit formatted statistics for human-readable logging."""
     logger.info(
         "%s: mean=%.3f Å | median=%.3f Å | std=%.3f Å | min=%.3f Å | max=%.3f Å",
         name,
@@ -207,7 +216,10 @@ def _log_distribution(logger, name: str, stats: Dict[str, Any]) -> None:
 
 
 class Evaluator:
+    """High-level helper that loads data, model state, and computes metrics."""
+
     def __init__(self, config: Mapping[str, Any] | str | Path) -> None:
+        """Initialise the evaluator from a configuration mapping or file."""
         self.logger = get_logger()
         if isinstance(config, Mapping):
             self.config_path = None
@@ -228,6 +240,7 @@ class Evaluator:
         )
 
     def _build_dataloader(self) -> DataLoader:
+        """Construct the evaluation dataloader."""
         dataset = BackboneDataset(
             self.data_cfg.root,
             chain_ids=self.data_cfg.chain_ids,
@@ -250,6 +263,7 @@ class Evaluator:
         return loader
 
     def _load_model(self) -> GCPVQVAE:
+        """Load a ``GCPVQVAE`` instance from the configured checkpoint."""
         checkpoint = load_checkpoint(self.model_cfg.checkpoint, map_location=self.device)
         state_dict = checkpoint.get("model")
         if state_dict is None:
@@ -276,6 +290,7 @@ class Evaluator:
         target: Tensor,
         mask: Tensor,
     ) -> Optional[Tensor]:
+        """Rigidly align ``predicted`` coordinates onto ``target`` using Kabsch."""
         valid = mask.to(torch.bool)
         if valid.sum() <= 0:
             return None
@@ -290,6 +305,7 @@ class Evaluator:
         return aligned.reshape_as(predicted)
 
     def run(self) -> Dict[str, Any]:
+        """Execute evaluation and return aggregated metrics."""
         model = self._load_model()
         dataloader = self._build_dataloader()
         return run_model_evaluation(
@@ -307,6 +323,18 @@ def run_model_evaluation(
     runtime_cfg: EvalRuntimeConfig,
     logger=None,
 ) -> Dict[str, Any]:
+    """Evaluate ``model`` on ``dataloader`` and aggregate structural metrics.
+
+    Args:
+        model: Trained ``GCPVQVAE`` model in evaluation mode.
+        dataloader: Iterable over collated backbone batches.
+        runtime_cfg: Runtime options controlling device placement and metrics.
+        logger: Optional logger used for status messages.
+
+    Returns:
+        Dictionary containing RMSD/TM-score/GDT-TS summaries, sequence lengths,
+        perplexity statistics, and auxiliary metadata.
+    """
     if logger is None:
         logger = get_logger()
 
@@ -455,7 +483,14 @@ def run_model_evaluation(
 
 
 def evaluate(config: Mapping[str, Any] | str | Path) -> Dict[str, Any]:
-    """Run evaluation using the specified configuration file."""
+    """Run evaluation using the specified configuration file or mapping.
+
+    Args:
+        config: Mapping or path describing data/model/runtime sections.
+
+    Returns:
+        Dictionary of aggregated evaluation metrics from :func:`run_model_evaluation`.
+    """
 
     return Evaluator(config).run()
 

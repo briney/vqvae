@@ -83,7 +83,18 @@ class VectorQuantizer(nn.Module):
         mask: Optional[Tensor] = None,
         return_metrics: bool = False,
     ) -> Tuple[Tensor, Tensor, Tensor] | Tuple[Tensor, Tensor, Tensor, Dict[str, Tensor]]:
-        """Quantise ``latents`` and return embeddings, indices, and the scalar loss."""
+        """Quantise latent embeddings via vector quantisation.
+
+        Args:
+            latents: Tensor of shape ``(B, L, D)`` with embedding dimension ``D``.
+            mask: Optional boolean mask selecting valid positions.
+            return_metrics: Include auxiliary loss metrics when ``True``.
+
+        Returns:
+            Quantised embeddings, code indices, and total loss. When
+            ``return_metrics`` is ``True`` the final element is a dictionary of
+            loss components instead of a scalar loss tensor.
+        """
 
         if latents.size(-1) != self.dim:
             raise ValueError(f"Expected latent dim {self.dim}, got {latents.size(-1)}")
@@ -130,6 +141,7 @@ class VectorQuantizer(nn.Module):
     def _build_loss_dict(
         self, total_loss: Tensor, breakdown: vqp.LossBreakdown
     ) -> Dict[str, Tensor]:
+        """Assemble a dictionary of loss components from the backend output."""
         commit = breakdown.commitment * self.commitment_weight
         orth = breakdown.orthogonal_reg * self.orthogonal_reg_weight
         codebook = total_loss - commit - orth
@@ -153,6 +165,7 @@ class VectorQuantizer(nn.Module):
         mask: Optional[Tensor],
         dtype: torch.dtype,
     ) -> Tensor:
+        """Compute codebook perplexity over valid indices."""
         if mask is None:
             mask = indices >= 0
         else:

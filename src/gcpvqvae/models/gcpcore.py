@@ -11,17 +11,14 @@ from torch import Tensor
 def safe_norm(vec: Tensor, *, dim: int = -1, keepdim: bool = False, eps: float = 1e-8) -> Tensor:
     """Return the L2 norm of ``vec`` clamped away from zero.
 
-    Parameters
-    ----------
-    vec:
-        Tensor containing vectors along dimension ``dim``.
-    dim:
-        Dimension containing the vector components.
-    keepdim:
-        Whether to retain ``dim`` in the returned tensor.
-    eps:
-        Minimum norm used for clamping.  This avoids divisions by zero when
-        normalising vectors in downstream modules.
+    Args:
+        vec: Tensor containing vectors along dimension ``dim``.
+        dim: Dimension containing the vector components.
+        keepdim: Retain ``dim`` in the returned tensor when ``True``.
+        eps: Minimum norm used for clamping to avoid division by zero.
+
+    Returns:
+        Tensor containing the clamped norms.
     """
 
     norm = torch.linalg.norm(vec, dim=dim, keepdim=keepdim)
@@ -29,7 +26,16 @@ def safe_norm(vec: Tensor, *, dim: int = -1, keepdim: bool = False, eps: float =
 
 
 def unit(vec: Tensor, *, dim: int = -1, eps: float = 1e-8) -> Tensor:
-    """Return a safely normalised copy of ``vec``."""
+    """Return a safely normalised copy of ``vec``.
+
+    Args:
+        vec: Tensor containing vectors to normalise.
+        dim: Dimension containing the vector components.
+        eps: Minimum norm used when normalising.
+
+    Returns:
+        Tensor of unit vectors.
+    """
 
     return vec / safe_norm(vec, dim=dim, keepdim=True, eps=eps)
 
@@ -37,9 +43,15 @@ def unit(vec: Tensor, *, dim: int = -1, eps: float = 1e-8) -> Tensor:
 def vector_linear(vectors: Tensor, weight: Tensor) -> Tensor:
     """Apply a linear map over vector channels while preserving equivariance.
 
-    The function expects ``vectors`` to have shape ``(..., C_in, 3)`` and applies
-    the ``(C_out, C_in)`` matrix ``weight`` across the channel dimension without
-    mixing spatial components.  The return tensor has shape ``(..., C_out, 3)``.
+    Args:
+        vectors: Tensor of shape ``(..., C_in, 3)``.
+        weight: Projection matrix of shape ``(C_out, C_in)``.
+
+    Returns:
+        Tensor of shape ``(..., C_out, 3)``.
+
+    Raises:
+        ValueError: If tensor dimensions are incompatible.
     """
 
     if vectors.size(-1) != 3:
@@ -64,7 +76,15 @@ def vector_linear(vectors: Tensor, weight: Tensor) -> Tensor:
 
 
 def apply_gating(update: Tensor, gate: Tensor) -> Tensor:
-    """Apply row-wise gates to vector features."""
+    """Apply row-wise gates to vector features.
+
+    Args:
+        update: Tensor of shape ``(..., C, 3)`` containing vector features.
+        gate: Tensor broadcastable to ``update[..., C]``.
+
+    Returns:
+        Tensor with gated vector features.
+    """
 
     if gate.ndim != update.ndim - 1:
         raise ValueError("Gate dimensionality must match update tensor")
@@ -74,7 +94,15 @@ def apply_gating(update: Tensor, gate: Tensor) -> Tensor:
 
 
 def broadcast_param(param: Tensor, target_dims: Iterable[int]) -> Tensor:
-    """Broadcast ``param`` across ``target_dims`` trailing dimensions."""
+    """Broadcast ``param`` across ``target_dims`` trailing dimensions.
+
+    Args:
+        param: Tensor to reshape.
+        target_dims: Number of leading singleton dimensions to prepend.
+
+    Returns:
+        Reshaped tensor with ``target_dims`` singleton axes followed by ``param``.
+    """
 
     shape = [1] * target_dims
     return param.view(*shape, -1)
@@ -83,20 +111,15 @@ def broadcast_param(param: Tensor, target_dims: Iterable[int]) -> Tensor:
 def scalarize(vectors: Tensor, frames: Tensor) -> Tensor:
     """Project vector features onto local frames to obtain scalars.
 
-    Parameters
-    ----------
-    vectors:
-        Tensor of shape ``(E, C, 3)`` storing vector channels aligned with
-        individual edges.  The final dimension must contain the 3D components.
-    frames:
-        Tensor of shape ``(E, 3, 3)`` storing an orthonormal frame per edge.
+    Args:
+        vectors: Tensor of shape ``(E, C, 3)`` storing vector channels.
+        frames: Tensor of shape ``(E, 3, 3)`` storing orthonormal frames.
 
-    Returns
-    -------
-    Tensor
-        Scalar representation of the projected vectors with shape
-        ``(E, C * 3)``.  Each vector channel contributes its projections onto
-        the three frame axes.
+    Returns:
+        Tensor of shape ``(E, C * 3)`` containing scalar projections.
+
+    Raises:
+        ValueError: If input shapes are incompatible.
     """
 
     if vectors.size(-1) != 3:
@@ -121,19 +144,15 @@ def vectorize(
 ) -> Tensor:
     """Reconstruct full-resolution vectors from downsampled channels.
 
-    Parameters
-    ----------
-    vectors:
-        Tensor containing the downsampled vector channels.
-    weight:
-        Optional linear projection used to lift the vectors back to the
-        original dimensionality.  If ``None`` the returned tensor is zero.
-    gate:
-        Optional multiplicative gates applied channel-wise.
-    vector_gate:
-        Whether the provided gate should modulate the reconstructed vectors.
-    enable_e3_equivariance:
-        Toggle allowing callers to switch off the equivariant pathway entirely.
+    Args:
+        vectors: Tensor containing downsampled vector channels.
+        weight: Optional projection matrix with shape ``(C_out, C_in)``.
+        gate: Optional multiplicative gates applied channel-wise.
+        vector_gate: Apply ``gate`` to the reconstructed vectors when ``True``.
+        enable_e3_equivariance: Disable the equivariant pathway when ``False``.
+
+    Returns:
+        Tensor of reconstructed vectors with shape ``(..., C_out, 3)``.
     """
 
     if weight is None or weight.numel() == 0:

@@ -163,6 +163,7 @@ class GCPVQVAE(nn.Module):
 
     # ------------------------------------------------------------------ utils
     def _initialize_gcp_encoder(self) -> None:
+        """Initialise the GCP encoder weights according to the configuration."""
         init_mode = getattr(self.config.gcp, "init", "random") or "random"
         mode = init_mode.lower()
         if mode == "random":
@@ -213,6 +214,7 @@ class GCPVQVAE(nn.Module):
 
     @staticmethod
     def _default_gcp_checkpoint_path() -> Optional[Path]:
+        """Return the packaged checkpoint path if it exists on disk."""
         resource = (
             files("gcpvqvae")
             / "models"
@@ -268,6 +270,7 @@ class GCPVQVAE(nn.Module):
     def _extract_gcp_state_dict(
         state: Mapping[str, Any],
     ) -> Optional[Dict[str, Tensor]]:
+        """Extract a GCP state dict from common checkpoint layouts."""
         if not isinstance(state, Mapping):
             return None
 
@@ -296,6 +299,7 @@ class GCPVQVAE(nn.Module):
     def _coerce_gcp_state_dict(
         source: Mapping[str, Tensor], target: Mapping[str, Tensor]
     ) -> Dict[str, Tensor]:
+        """Filter and remap checkpoint tensors to match the current encoder."""
         coerced: Dict[str, Tensor] = {}
         for key, tensor in source.items():
             if key in target and isinstance(tensor, torch.Tensor):
@@ -325,21 +329,26 @@ class GCPVQVAE(nn.Module):
         return coerced
 
     def _device(self) -> torch.device:
+        """Return the module's primary device."""
         return next(self.parameters()).device
 
     def _dtype(self) -> torch.dtype:
+        """Return the module's default floating-point dtype."""
         return next(self.parameters()).dtype
 
     def _flatten_batch(self, tensor: Tensor) -> Tensor:
+        """Collapse batch and length dimensions into a single axis."""
         if tensor.ndim < 2:
             raise ValueError("Expected tensor with batch and length dimensions")
         batch, length = tensor.shape[:2]
         return tensor.reshape(batch * length, *tensor.shape[2:])
 
     def _reshape_batch(self, tensor: Tensor, batch: int, length: int) -> Tensor:
+        """Inverse of :meth:`_flatten_batch` for known batch/length."""
         return tensor.reshape(batch, length, *tensor.shape[1:])
 
     def _project_embeddings(self, embeddings: Tensor) -> Tensor:
+        """Apply the optional latent adapter when enabled."""
         if self.latent_adapter is None:
             return embeddings
         return self.latent_adapter(embeddings)
@@ -354,6 +363,18 @@ class GCPVQVAE(nn.Module):
         mask: Optional[Tensor] = None,
         nan_mask: Optional[Tensor] = None,
     ) -> Dict[str, Tensor]:
+        """Forward pass returning reconstruction and VQ losses.
+
+        Args:
+            batch: Dictionary produced by :func:`collate_backbones`.
+            decoder_only: When ``True``, bypass the encoder and decode provided indices.
+            return_vq_layer: Return intermediate embeddings instead of decoding.
+            mask: Optional boolean mask overriding ``batch['mask']``.
+            nan_mask: Optional mask excluding NaN positions from reconstruction.
+
+        Returns:
+            Mapping containing quantised latents, decoded coordinates, masks, and losses.
+        """
         device = self._device()
         dtype = self._dtype()
 
@@ -468,6 +489,7 @@ class GCPVQVAE(nn.Module):
 
     # ----------------------------------------------------------- encode helper
     def _build_metadata(self, record: BackboneRecord) -> Dict[str, Any]:
+        """Construct metadata dictionary accompanying encoded outputs."""
         return {
             "path": record.path,
             "chain_id": record.chain_id,
@@ -488,6 +510,7 @@ class GCPVQVAE(nn.Module):
         edge_frames: Tensor,
         mask: Tensor,
     ) -> Tuple[Tensor, Tensor, Tensor, Dict[str, Tensor]]:
+        """Encode raw tensors into latent embeddings and VQ-ready features."""
         device = self._device()
         dtype = self._dtype()
 
@@ -555,6 +578,17 @@ class GCPVQVAE(nn.Module):
         length_cap: Optional[int] = None,
         k: Optional[int] = None,
     ) -> Dict[str, Any]:
+        """Encode an mmCIF/PDB chain into discrete latent tokens.
+
+        Args:
+            mmcif_path: Path to the structure file.
+            chain_id: Optional chain identifier to extract.
+            length_cap: Optional residue limit applied during loading.
+            k: Number of nearest neighbours for feature construction.
+
+        Returns:
+            Dictionary containing tokens, embeddings, masks, VQ diagnostics, and metadata.
+        """
         was_training = self.training
         self.eval()
         try:
@@ -619,6 +653,17 @@ class GCPVQVAE(nn.Module):
         mask: Optional[Iterable[bool] | Tensor | np.ndarray] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        """Decode tokens back into backbone coordinates.
+
+        Args:
+            tokens: Token sequence(s) or tensor.
+            pose_header: Optional tuple of rotation matrix and translation vector.
+            mask: Optional boolean mask selecting valid tokens.
+            metadata: Optional dictionary used to rebuild ``BackboneRecord`` outputs.
+
+        Returns:
+            Dictionary with reconstructed coordinates, poses, masks, and optional records.
+        """
         was_training = self.training
         self.eval()
         try:

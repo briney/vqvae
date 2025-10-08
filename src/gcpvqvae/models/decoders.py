@@ -23,6 +23,13 @@ class NdLinear(nn.Module):
         *,
         bias: bool = True,
     ) -> None:
+        """Initialise the NdLinear projection.
+
+        Args:
+            input_dims: Tuple ``(max_length, in_features)`` describing input shape.
+            hidden_size: Tuple ``(max_length, out_features)`` describing output shape.
+            bias: Add a position-dependent bias term when ``True``.
+        """
         super().__init__()
 
         if len(input_dims) != 2 or len(hidden_size) != 2:
@@ -51,6 +58,15 @@ class NdLinear(nn.Module):
             self.register_parameter("bias", None)
 
     def forward(self, x: Tensor) -> Tensor:
+        """Apply the position-aware linear projection.
+
+        Args:
+            x: Tensor of shape ``(..., length, in_features)`` with ``length`` not
+                exceeding ``self.max_length``.
+
+        Returns:
+            Tensor of shape ``(..., length, out_features)``.
+        """
         if x.shape[-1] != self.in_features:
             raise ValueError(
                 f"Expected input feature dimension {self.in_features}, got {x.shape[-1]}"
@@ -72,6 +88,7 @@ class GeometricTransformerDecoder(nn.Module):
     """Decoder aligning latent tokens with geometric reconstruction heads."""
 
     def __init__(self, config: TransformerConfig) -> None:
+        """Initialise the transformer decoder from a configuration."""
         super().__init__()
         self.config = config
 
@@ -126,6 +143,15 @@ class GeometricTransformerDecoder(nn.Module):
         )
 
     def forward(self, latents: Tensor, *, mask: Optional[Tensor] = None) -> Tensor:
+        """Decode latent tokens into geometric features using attention layers.
+
+        Args:
+            latents: Tensor of shape ``(batch, length, dim)`` containing latent embeddings.
+            mask: Optional boolean tensor marking valid positions.
+
+        Returns:
+            Tensor of shape ``(batch, length, output_dim)`` with decoded features.
+        """
         if latents.ndim != 3:
             raise ValueError("Decoder inputs must have shape (batch, length, dim)")
 

@@ -19,12 +19,35 @@ RBF_SIGMA = 2.0
 
 
 def _safe_normalise(vec: Tensor, eps: float = 1e-8) -> Tensor:
+    """Return unit-length vectors with an ``eps`` safety floor.
+
+    Args:
+        vec: Tensor of shape ``(..., 3)`` containing Cartesian vectors.
+        eps: Minimum norm used when normalising to avoid division by zero.
+
+    Returns:
+        Tensor with the same shape as ``vec`` where each 3-vector has unit norm.
+
+    Examples:
+        >>> _safe_normalise(torch.tensor([[3.0, 0.0, 0.0]]))
+        tensor([[1., 0., 0.]])
+    """
     norm = torch.linalg.norm(vec, dim=-1, keepdim=True)
     norm = torch.clamp(norm, min=eps)
     return vec / norm
 
 
 def _rbf(distances: Tensor, centres: Tensor, sigma: float) -> Tensor:
+    """Expand distances into radial basis function features.
+
+    Args:
+        distances: Tensor of shape ``(...,)`` holding pairwise distances in Å.
+        centres: Tensor of RBF centres with shape ``(K,)``.
+        sigma: Standard deviation applied to the Gaussian kernel.
+
+    Returns:
+        Tensor of shape ``(..., K)`` containing RBF responses per distance.
+    """
     diff = distances.unsqueeze(-1) - centres
     return torch.exp(-0.5 * (diff / sigma) ** 2)
 
@@ -46,6 +69,24 @@ class EdgeFeatures:
 
 
 def _backbone_vectors(coords: Tensor, mask: Tensor) -> Tuple[Tensor, Tensor]:
+    """Compute backbone-aligned vector sets for each residue.
+
+    Args:
+        coords: Tensor of shape ``(L, 3, 3)`` containing ``(N, CA, C)`` atom
+            coordinates in Å.
+        mask: Boolean tensor of shape ``(L,)`` indicating residues with a
+            complete backbone triplet.
+
+    Returns:
+        Tuple ``(backbone_vectors, node_vectors)`` where:
+
+        * ``backbone_vectors`` has shape ``(L, 6, 3)`` with an orthonormal set
+          spanning key local directions (``CA-N``, ``C-CA``, ``N_{i+1}-C_i``,
+          and derived cross products).
+        * ``node_vectors`` has shape ``(L, 3, 3)`` and includes three canonical
+          vectors (``CA-N``, ``C-CA``, and their cross product) used by the
+          equivariant encoder.
+    """
     n = coords[:, 0, :]
     ca = coords[:, 1, :]
     c = coords[:, 2, :]
@@ -100,6 +141,23 @@ def _backbone_vectors(coords: Tensor, mask: Tensor) -> Tuple[Tensor, Tensor]:
 
 
 def build_node_features(backbone: BackboneRecord) -> NodeFeatures:
+    """Construct scalar, vector, and torsion features for each residue.
+
+    Args:
+        backbone: Backbone record whose ``coords`` follow shape ``(L, 3, 3)`` and
+            contain a mask identifying residues with valid backbone atoms.
+
+    Returns:
+        ``NodeFeatures`` containing:
+
+        * ``scalars``: Tensor ``(L, 6)`` with sin/cos encodings for ``φ``, ``ψ``,
+          and ``ω`` torsions.
+        * ``vectors``: Tensor ``(L, 3, 3)`` with orthonormal frames used by
+          equivariant layers.
+        * ``backbone_vectors``: Tensor ``(L, 6, 3)`` with extended backbone
+          directional features.
+        * ``torsions``: Tensor ``(L, 3)`` storing raw torsion angles in radians.
+    """
     coords = backbone.coords
     mask = backbone.mask
 
@@ -151,6 +209,16 @@ def build_node_features(backbone: BackboneRecord) -> NodeFeatures:
 
 
 def _sequence_edges(mask: Tensor) -> Tensor:
+    """Return bidirectional edges connecting sequential residues.
+
+    Args:
+        mask: Boolean tensor of shape ``(L,)`` indicating valid residues.
+
+    Returns:
+        Tensor of shape ``(2, E_seq)`` storing directed edges ``i -> i+1`` and
+        ``i+1 -> i`` for all consecutive valid residues. Returns an empty tensor
+        if fewer than two residues are valid.
+    """
     if mask.numel() < 2:
         return torch.empty((2, 0), dtype=torch.long)
 
@@ -169,6 +237,17 @@ def _sequence_edges(mask: Tensor) -> Tensor:
 
 
 def _knn_edges(ca: Tensor, mask: Tensor, k: int) -> Tensor:
+    """Build k-nearest-neighbour graph edges over CA positions.
+
+    Args:
+        ca: Tensor of shape ``(L, 3)`` containing CA coordinates.
+        mask: Boolean tensor of shape ``(L,)`` flagging valid residues.
+        k: Number of nearest neighbours to connect per residue.
+
+    Returns:
+        Tensor of shape ``(2, E_knn)`` holding directed edges for the symmetric
+        k-NN graph. If fewer than two valid residues exist the tensor is empty.
+    """
     valid_idx = torch.nonzero(mask, as_tuple=False).squeeze(-1)
     if valid_idx.numel() <= 1:
         return torch.empty((2, 0), dtype=torch.long, device=ca.device)
@@ -209,6 +288,16 @@ def build_edge_features(
     *,
     k: int = 16,
 ) -> EdgeFeatures:
+    """Construct edge features from backbone geometry.
+
+    Args:
+        backbone: Backbone record providing ``coords`` and ``atom_mask`` tensors.
+        k: Number of nearest neighbours to include when building the graph.
+
+    Returns:
+        ``EdgeFeatures`` containing unique directed edges, RBF-expanded scalar
+        distances, displacement vectors, and local frames for each edge.
+    """
     ca = backbone.coords[:, 1, :]
     mask = backbone.atom_mask[:, 1]
 
@@ -244,6 +333,23 @@ def build_edge_features(
 
 
 def featurize_backbone(backbone: BackboneRecord, *, k: int = 16) -> Dict[str, Tensor]:
+    """Generate the full feature dictionary consumed by the encoder.
+
+    Args:
+        backbone: Backbone record describing a single protein chain.
+        k: Number of nearest neighbours used when constructing edge features.
+
+    Returns:
+        Dictionary compatible with the training pipeline containing node and
+        edge features. Keys include ``node_scalars``, ``node_vectors``,
+        ``backbone_vectors``, ``torsion_angles``, ``edge_index``, ``edge_scalars``,
+        ``edge_vectors``, and ``edge_frames``.
+
+    Examples:
+        >>> features = featurize_backbone(backbone_record, k=8)
+        >>> features["edge_index"].shape
+        torch.Size([2, 2 * backbone_record.length])
+    """
     node = build_node_features(backbone)
     edge = build_edge_features(backbone, k=k)
 

@@ -11,12 +11,29 @@ from gcpvqvae.geometry.frames import kabsch_align
 
 
 def _flatten_backbone(coords: Tensor) -> Tensor:
+    """Reshape backbone tensors for pairwise operations.
+
+    Args:
+        coords: Coordinate tensor with shape ``(B, L, 3, 3)``.
+
+    Returns:
+        Tensor reshaped to ``(B, L*3, 3)``.
+    """
     if coords.ndim != 4 or coords.size(-2) != 3 or coords.size(-1) != 3:
         raise ValueError("Backbone tensors must have shape (B, L, 3, 3)")
     return coords.view(coords.size(0), coords.size(1) * 3, 3)
 
 
 def _broadcast_mask(mask: Optional[Tensor], length: int) -> Optional[Tensor]:
+    """Expand residue masks across atoms to match :func:`_flatten_backbone`.
+
+    Args:
+        mask: Optional residue mask ``(B, L)``.
+        length: Number of residues ``L``.
+
+    Returns:
+        Mask broadcast to ``(B, L*3)`` or ``None`` when no mask is provided.
+    """
     if mask is None:
         return None
     if mask.ndim != 2:
@@ -39,7 +56,16 @@ def aligned_mse(
     *,
     mask: Optional[Tensor] = None,
 ) -> Tensor:
-    """Compute :math:`(P - T_\text{aln})^2` averaged over valid atoms."""
+    """Compute :math:`(P - T_\\text{aln})^2` averaged over valid atoms.
+
+    Args:
+        pred: Predicted coordinates with shape ``(B, L, 3, 3)``.
+        target: Target coordinates with shape ``(B, L, 3, 3)``.
+        mask: Optional boolean mask ``(B, L)`` selecting valid residues.
+
+    Returns:
+        Scalar tensor containing the aligned MSE loss.
+    """
 
     pred_flat = _flatten_backbone(pred)
     target_flat = _flatten_backbone(target)
@@ -89,7 +115,17 @@ def backbone_distance_loss(
     mask: Optional[Tensor] = None,
     clamp_distance: float = 25.0,
 ) -> Tensor:
-    """Pairwise distance loss on flattened backbone atom coordinates."""
+    """Pairwise distance loss on flattened backbone atom coordinates.
+
+    Args:
+        pred: Predicted coordinates ``(B, L, 3, 3)``.
+        target: Target coordinates ``(B, L, 3, 3)``.
+        mask: Optional residue mask ``(B, L)``.
+        clamp_distance: Maximum distance (Å) used when comparing pairs.
+
+    Returns:
+        Scalar tensor containing the pairwise distance loss.
+    """
 
     pred_flat = _flatten_backbone(pred)
     target_flat = _flatten_backbone(target)
@@ -124,6 +160,14 @@ def backbone_distance_loss(
 
 
 def _backbone_vectors(coords: Tensor) -> Tensor:
+    """Construct canonical backbone direction vectors for each residue.
+
+    Args:
+        coords: Coordinate tensor ``(B, L, 3, 3)``.
+
+    Returns:
+        Tensor ``(B, L, 6, 3)`` containing direction vectors per residue.
+    """
     n = coords[:, :, 0, :]
     ca = coords[:, :, 1, :]
     c = coords[:, :, 2, :]
@@ -154,7 +198,17 @@ def backbone_direction_loss(
     mask: Optional[Tensor] = None,
     clamp_value: float = 20.0,
 ) -> Tensor:
-    """Loss on backbone direction signatures using pairwise dot products."""
+    """Loss on backbone direction signatures using pairwise dot products.
+
+    Args:
+        pred: Predicted coordinates ``(B, L, 3, 3)``.
+        target: Target coordinates ``(B, L, 3, 3)``.
+        mask: Optional residue mask ``(B, L)``.
+        clamp_value: Clamp applied to dot products for numerical stability.
+
+    Returns:
+        Scalar tensor containing the direction signature loss.
+    """
 
     pred_vectors = _backbone_vectors(pred)
     target_vectors = _backbone_vectors(target)
@@ -195,7 +249,18 @@ def reconstruction_loss(
     weights: Tuple[float, float, float] = (5e-3, 1e-2, 5e-2),
     return_components: bool = False,
 ) -> Tuple[Tensor, Dict[str, Tensor]] | Tensor:
-    """Compute the weighted reconstruction loss following Algorithm 2."""
+    """Compute the weighted reconstruction loss following Algorithm 2.
+
+    Args:
+        pred: Predicted coordinates ``(B, L, 3, 3)``.
+        target: Target coordinates ``(B, L, 3, 3)``.
+        mask: Optional residue mask ``(B, L)``.
+        weights: Tuple of weights for aligned MSE, distance, and direction losses.
+        return_components: Return individual loss components when ``True``.
+
+    Returns:
+        Total reconstruction loss, optionally with component breakdown.
+    """
 
     l_mse = aligned_mse(pred, target, mask=mask)
     l_dist = backbone_distance_loss(pred, target, mask=mask)

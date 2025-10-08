@@ -26,6 +26,18 @@ except Exception:  # pragma: no cover - tqdm is optional
 
 
 def _load_records_for_dataset(args: Tuple[str, int, Optional[Sequence[str]]]) -> List[BackboneRecord]:
+    """Load backbone records for a single structure path.
+
+    Args:
+        args: Tuple ``(path, length_cap, chain_ids)`` where ``path`` points to a
+            backbone file, ``length_cap`` limits residues per chain (0 disables
+            trimming), and ``chain_ids`` optionally filters to specific chain
+            identifiers.
+
+    Returns:
+        List of ``BackboneRecord`` instances satisfying the filters. Chains with
+        zero valid residues are skipped.
+    """
     path, length_cap, chain_filter = args
     chains = set(chain_filter) if chain_filter is not None else None
 
@@ -44,6 +56,15 @@ def _load_records_for_dataset(args: Tuple[str, int, Optional[Sequence[str]]]) ->
 
 
 def _discover_files(root: Path) -> List[Path]:
+    """Enumerate candidate backbone files under ``root``.
+
+    Args:
+        root: Directory or file path pointing to protein structure data.
+
+    Returns:
+        List of file paths matching known backbone extensions (mmCIF/PDB). If
+        ``root`` is a file, the list contains only ``root``.
+    """
     if root.is_file():
         return [root]
 
@@ -64,6 +85,16 @@ def _discover_files(root: Path) -> List[Path]:
 
 
 def _clone_nested(value: Any) -> Any:
+    """Recursively clone tensors, dicts, tuples, and lists.
+
+    Args:
+        value: Arbitrary nested structure containing tensors and Python
+            containers.
+
+    Returns:
+        Deep copy of ``value`` where tensors are cloned to avoid in-place
+        modification of cached samples.
+    """
     if isinstance(value, torch.Tensor):
         return value.clone()
     if isinstance(value, dict):
@@ -76,6 +107,17 @@ def _clone_nested(value: Any) -> Any:
 
 
 def _trim_sample(sample: Dict[str, Any], max_length: int) -> Dict[str, Any]:
+    """Truncate a preprocessed sample to ``max_length`` residues in-place.
+
+    Args:
+        sample: Mapping with tensor entries such as ``coords`` and ``edge_index``.
+        max_length: Length cap to enforce. Values ``<= 0`` leave the sample
+            unchanged.
+
+    Returns:
+        The trimmed sample mapping. All sequence-dependent fields are slice
+        truncated, and edges exceeding the cap are removed.
+    """
     if max_length <= 0:
         return sample
 
@@ -125,6 +167,15 @@ def _trim_sample(sample: Dict[str, Any], max_length: int) -> Dict[str, Any]:
 
 
 def _decode_h5_sequence(raw: Any) -> str:
+    """Convert HDF5-backed sequence payloads into ASCII strings.
+
+    Args:
+        raw: Sequence representation returned by ``h5py``. Accepts bytes,
+            numpy arrays, or nested iterables.
+
+    Returns:
+        Uppercase amino-acid sequence decoded to ASCII without NULL padding.
+    """
     if isinstance(raw, bytes):
         return raw.decode("ascii").replace("\x00", "")
     if isinstance(raw, np.ndarray):
@@ -151,6 +202,24 @@ class BackboneDataset(Dataset):
         cache: bool = True,
         progress: bool = True,
     ) -> None:
+        """Parse backbone files and optionally load cached features.
+
+        Args:
+            root: Path to a directory or file containing mmCIF/PDB chains or a
+                preprocessed dataset.
+            chain_ids: Optional iterable of chain identifiers to keep.
+            length_cap: Maximum number of residues per chain; zero disables
+                trimming.
+            k: Number of nearest neighbours for graph construction when
+                featurising on-the-fly.
+            cache: Whether to memoize loaded records or preprocessed samples in
+                memory.
+            progress: Show a CLI progress bar when parsing raw structure files.
+
+        Raises:
+            FileNotFoundError: If ``root`` does not exist.
+            ValueError: If no valid backbone chains are discovered.
+        """
         self.root = Path(root)
         if not self.root.exists():
             raise FileNotFoundError(root)
@@ -203,9 +272,16 @@ class BackboneDataset(Dataset):
             raise ValueError("Dataset does not contain any valid backbone chains")
 
     def __len__(self) -> int:
+        """Return the number of chains in the dataset."""
         return len(self._keys)
 
     def _store_records(self, records: Iterable[BackboneRecord]) -> None:
+        """Cache newly parsed records and append their lookup keys.
+
+        Args:
+            records: Iterable of backbone records generated from raw structure
+                files.
+        """
         for record in records:
             key = (record.path, record.chain_id)
             self._keys.append(key)
@@ -213,6 +289,17 @@ class BackboneDataset(Dataset):
                 self._records[key] = record
 
     def _get_record(self, key: Tuple[str, str]) -> BackboneRecord:
+        """Load a backbone record, using the cache when available.
+
+        Args:
+            key: Tuple ``(path, chain_id)`` uniquely identifying a chain.
+
+        Returns:
+            Backbone record with featurizable tensors normalized to the origin.
+
+        Raises:
+            KeyError: If the requested chain cannot be retrieved.
+        """
         if self._cache_enabled and key in self._records:
             cached = self._records[key]
             if isinstance(cached, BackboneRecord):
@@ -228,6 +315,16 @@ class BackboneDataset(Dataset):
         return record
 
     def __getitem__(self, index: int) -> Dict[str, Tensor | Dict[str, object]]:
+        """Return featurized tensors for a backbone chain.
+
+        Args:
+            index: Dataset index referring to a ``(path, chain_id)`` pair.
+
+        Returns:
+            Mapping containing backbone coordinates ``(L, 3, 3)``, boolean masks,
+            Hydra-ready node and edge features, rigid pose information, and
+            metadata about the source chain.
+        """
         key = self._keys[index]
         if self._preprocessed:
             return self._get_preprocessed_sample(index, key)
@@ -272,6 +369,17 @@ class BackboneDataset(Dataset):
         length_cap: int,
         k: int,
     ) -> None:
+        """Initialise the dataset from a preprocessed manifest on disk.
+
+        Args:
+            manifest_path: Path to ``preprocessed_dataset.json``.
+            chain_ids: Optional chain filter applied to the manifest entries.
+            length_cap: Maximum residue count retained from the manifest.
+            k: Expected k-NN parameter used to validate compatibility.
+
+        Raises:
+            ValueError: If the manifest version or layout is unsupported.
+        """
         with manifest_path.open("r", encoding="utf-8") as handle:
             manifest = json.load(handle)
 
@@ -299,6 +407,21 @@ class BackboneDataset(Dataset):
         length_cap: int,
         k: int,
     ) -> None:
+        """Configure the dataset using Torch-generated preprocessing artefacts.
+
+        Args:
+            manifest_path: Path to the manifest JSON file.
+            manifest: Parsed manifest contents.
+            entries: List of entry dictionaries describing cached Torch tensors.
+            chain_ids: Optional chain filter to apply.
+            length_cap: Maximum number of residues retained per chain.
+            k: Expected k-NN parameter used for compatibility checks.
+
+        Raises:
+            ValueError: If the manifest version mismatches or no chains remain
+                after filtering.
+            FileNotFoundError: If a referenced sample file is missing.
+        """
         version = manifest.get("version")
         if version != PREPROCESSED_VERSION:
             raise ValueError(
@@ -376,6 +499,19 @@ class BackboneDataset(Dataset):
         length_cap: int,
         k: int,
     ) -> None:
+        """Configure the dataset using HDF5-based preprocessing artefacts.
+
+        Args:
+            manifest_path: Path to the manifest JSON file.
+            chains: List of chain dictionaries describing cached HDF5 samples.
+            chain_ids: Optional chain filter to apply.
+            length_cap: Maximum number of residues retained per chain.
+            k: Stored k-NN parameter (for API parity with Torch preprocessing).
+
+        Raises:
+            ValueError: If no chains remain after filtering.
+            FileNotFoundError: If a referenced sample file is missing.
+        """
         chain_filter = set(chain_ids) if chain_ids is not None else None
 
         filtered: List[Dict[str, Any]] = []
@@ -432,6 +568,19 @@ class BackboneDataset(Dataset):
     def _get_preprocessed_sample(
         self, index: int, key: Tuple[str, str]
     ) -> Dict[str, Tensor | Dict[str, object]]:
+        """Load and trim a preprocessed sample from disk or cache.
+
+        Args:
+            index: Dataset index used to select the preprocessed file path.
+            key: Tuple ``(source_path, chain_id)`` indexing the cache dictionary.
+
+        Returns:
+            Deep-copied sample mapping trimmed to ``self.length_cap`` residues.
+
+        Raises:
+            ValueError: If the preprocessed file format is unknown.
+            TypeError: If a cached payload is not dictionary-like.
+        """
         if self._cache_enabled and key in self._records:
             cached = self._records[key]
         else:
@@ -460,6 +609,22 @@ class BackboneDataset(Dataset):
         key: Tuple[str, str],
         metadata: Dict[str, Any],
     ) -> Dict[str, Tensor | Dict[str, object]]:
+        """Load an HDF5 sample and convert it to the standard feature dict.
+
+        Args:
+            sample_path: Path to the ``.h5`` file containing cached tensors.
+            key: Tuple ``(source_path, chain_id)`` indicating the dataset entry.
+            metadata: Supplemental metadata from the manifest describing the
+                sample.
+
+        Returns:
+            Mapping identical to :meth:`__getitem__` output plus
+            ``plddt_scores`` extracted from the file.
+
+        Raises:
+            RuntimeError: If ``h5py`` is not installed when loading HDF5 files.
+            TypeError: If the stored payload is not a dictionary.
+        """
         try:
             import h5py  # type: ignore[import-not-found]
         except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency
@@ -552,6 +717,28 @@ class BackboneDataset(Dataset):
 
 
 def collate_backbones(batch: List[Dict[str, Tensor | Dict[str, object]]]) -> Dict[str, Tensor | List[Dict[str, object]]]:
+    """Collate backbone samples into padded batch tensors.
+
+    Args:
+        batch: List of samples produced by :class:`BackboneDataset`. Each item
+            must contain the keys emitted by :meth:`BackboneDataset.__getitem__`.
+
+    Returns:
+        Dictionary with batched tensors ready for model consumption. Notable
+        shapes include ``coords`` with ``(B, L_max, 3, 3)``, ``node_scalars`` with
+        ``(B, L_max, 6)``, and ``edge_index`` with ``(2, E_total)``. Metadata and
+        sequence strings are returned as Python lists.
+
+    Raises:
+        ValueError: If ``batch`` is empty.
+
+    Examples:
+        >>> dataset = BackboneDataset("path/to/data", cache=False)
+        >>> sample_batch = [dataset[0], dataset[1]]
+        >>> collated = collate_backbones(sample_batch)
+        >>> collated["coords"].shape
+        torch.Size([2, collated["lengths"].max(), 3, 3])
+    """
     if not batch:
         raise ValueError("Batch must not be empty")
 

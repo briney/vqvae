@@ -19,11 +19,14 @@ Tensor = torch.Tensor
 
 
 def _normalize(vec: Tensor, eps: float = 1e-8) -> Tensor:
-    """Return a safely normalised version of ``vec``.
+    """Return safely normalised vectors.
 
-    ``vec`` is assumed to be a floating point tensor whose final dimension
-    contains the vector components.  Norms that would underflow are clamped so
-    that zero-vectors are mapped to themselves.
+    Args:
+        vec: Tensor whose final dimension stores vector components.
+        eps: Minimum norm used to avoid division by zero.
+
+    Returns:
+        Tensor with the same shape as ``vec`` containing unit-length vectors.
     """
 
     norm = torch.linalg.norm(vec, dim=-1, keepdim=True)
@@ -34,10 +37,11 @@ def _normalize(vec: Tensor, eps: float = 1e-8) -> Tensor:
 def _orthonormal_vector(vec: Tensor) -> Tensor:
     """Return an arbitrary vector orthogonal to ``vec``.
 
-    The implementation mirrors the strategy commonly used in graphics: select
-    the axis with the smallest magnitude component and subtract the projection
-    of the corresponding basis vector.  The function is fully vectorised and can
-    operate on batches of vectors.
+    Args:
+        vec: Tensor of shape ``(..., 3)`` storing target directions.
+
+    Returns:
+        Tensor of shape ``(..., 3)`` with orthonormal companion vectors.
     """
 
     batch_shape = vec.shape[:-1]
@@ -59,28 +63,19 @@ def build_local_frames(
 ) -> Tensor:
     """Construct a right-handed orthonormal frame for each directed edge.
 
-    Parameters
-    ----------
-    ca_positions:
-        Tensor of shape ``(L, 3)`` containing Cα coordinates for a single
-        protein chain.
-    edge_index:
-        Long tensor of shape ``(2, E)`` specifying the directed edges.  The
-        convention follows PyTorch Geometric where ``edge_index[0]`` are source
-        indices and ``edge_index[1]`` the corresponding destinations.
-    mask:
-        Optional boolean mask of shape ``(L,)`` marking valid residues.  Frames
-        touching masked residues are set to the identity matrix so they can be
-        ignored by downstream modules.
-    eps:
-        Numerical stability constant.
+    Args:
+        ca_positions: Tensor of shape ``(L, 3)`` containing Cα coordinates.
+        edge_index: Long tensor of shape ``(2, E)`` indicating directed edges.
+        mask: Optional boolean mask of shape ``(L,)`` marking valid residues.
+            Frames touching invalid residues are replaced with identities.
+        eps: Numerical stability constant used during normalisation.
 
-    Returns
-    -------
-    Tensor of shape ``(E, 3, 3)`` where each slice is a rotation matrix whose
-    first column is the unit edge direction, the second column captures the
-    locally-biased normal (projected into the edge-orthogonal plane) and the
-    third column completes the right-handed triad via a cross product.
+    Returns:
+        Tensor of shape ``(E, 3, 3)`` where each slice is a rotation matrix with
+        tangent, normal, and binormal vectors as columns.
+
+    Raises:
+        ValueError: If input tensors have unexpected shapes.
     """
 
     if ca_positions.ndim != 2 or ca_positions.size(-1) != 3:
@@ -155,28 +150,22 @@ def kabsch_align(
 ) -> Tuple[Tensor, Tensor, Optional[Tensor]]:
     """Compute the optimal rigid transform aligning ``src`` onto ``dst``.
 
-    Parameters
-    ----------
-    src, dst:
-        Tensors of shape ``(N, 3)`` describing two point clouds.  The function
-        accepts any floating point dtype supported by :mod:`torch`.
-    mask:
-        Optional boolean tensor of shape ``(N,)`` marking valid correspondences.
-    allow_reflections:
-        If ``False`` (default) the returned rotation always has determinant +1;
-        in the rare event that the optimal transform contains a reflection we
-        flip the last singular vector as described in the original Kabsch
-        publication.
-    return_aligned:
-        When ``True`` the aligned source coordinates are returned as the third
-        element of the tuple.
+    Args:
+        src: Tensor of shape ``(N, 3)`` describing source coordinates.
+        dst: Tensor of shape ``(N, 3)`` describing target coordinates.
+        mask: Optional boolean tensor of shape ``(N,)`` indicating valid
+            correspondences.
+        allow_reflections: Allow reflection components in the optimal rotation.
+        return_aligned: When ``True`` also return the aligned source points.
 
-    Returns
-    -------
-    rotation, translation[, aligned]
-        ``rotation`` has shape ``(3, 3)`` and ``translation`` has shape ``(3,)``.
-        If ``return_aligned`` is ``True`` the third element is the aligned source
-        coordinates of shape ``(N, 3)``.
+    Returns:
+        Tuple ``(rotation, translation, aligned)`` where ``rotation`` has shape
+        ``(3, 3)``, ``translation`` has shape ``(3,)``, and ``aligned`` is either
+        ``None`` or the aligned source coordinates of shape ``(N, 3)``.
+
+    Raises:
+        ValueError: If shapes are incompatible or fewer than three valid points
+            are provided when ``mask`` is used.
     """
 
     if src.shape != dst.shape:

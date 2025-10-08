@@ -10,7 +10,17 @@ Tensor = torch.Tensor
 
 
 def _dihedral(p0: Tensor, p1: Tensor, p2: Tensor, p3: Tensor) -> Tensor:
-    """Return the signed dihedral angle for four sets of points."""
+    """Return the signed dihedral angle for four sets of points.
+
+    Args:
+        p0: Tensor of shape ``(..., 3)`` with the first positions.
+        p1: Tensor matching ``p0`` with the second positions.
+        p2: Tensor matching ``p0`` with the third positions.
+        p3: Tensor matching ``p0`` with the fourth positions.
+
+    Returns:
+        Tensor of dihedral angles in radians with shape ``(...)``.
+    """
 
     b0 = p1 - p0
     b1 = p2 - p1
@@ -31,12 +41,19 @@ def _dihedral(p0: Tensor, p1: Tensor, p2: Tensor, p3: Tensor) -> Tensor:
 
 
 def backbone_torsions(backbone: Tensor) -> Dict[str, Tensor]:
-    """Compute φ, ψ and ω torsions for an ``(L, 3, 3)`` backbone tensor.
+    """Compute φ, ψ, and ω torsions for a backbone tensor.
 
-    Missing angles (because the required atoms are unavailable) are filled with
-    zeros which keeps the function convenient to use when creating feature
-    tensors.  The caller can always infer validity by checking which residues are
-    interior to the chain.
+    Args:
+        backbone: Tensor of shape ``(L, 3, 3)`` containing ``(N, CA, C)`` atom
+            coordinates.
+
+    Returns:
+        Dictionary mapping ``phi``, ``psi``, and ``omega`` to tensors of shape
+        ``(L,)`` with torsion angles in radians. Missing values are filled with
+        zeros.
+
+    Raises:
+        ValueError: If ``backbone`` does not have shape ``(L, 3, 3)``.
     """
 
     if backbone.ndim != 3 or backbone.shape[1:] != (3, 3):

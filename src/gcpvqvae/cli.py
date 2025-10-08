@@ -102,7 +102,17 @@ def preprocess_dataset_command(
     no_file_index: bool,
     gap_threshold: Optional[float],
 ) -> None:
-    """Preprocess raw backbone data for faster reuse."""
+    """Preprocess raw backbone data for faster reuse.
+
+    Args:
+        input: Path to a backbone file or directory containing structures.
+        output: Destination directory for cached tensors and manifest.
+        max_len: Optional length cap applied during preprocessing.
+        min_len: Optional minimum length filter.
+        max_workers: Maximum number of worker processes to spawn.
+        no_file_index: Skip generating ``file_index.json`` when ``True``.
+        gap_threshold: Maximum gap distance (Å) before splitting chains.
+    """
 
     if max_len is not None and max_len <= 0:
         raise click.ClickException("--max-len must be a positive integer.")
@@ -163,7 +173,12 @@ def preprocess_dataset_command(
 )
 @click.argument("overrides", nargs=-1, metavar="[OVERRIDE]...", type=str)
 def train_command(config_path: Optional[Path], overrides: Tuple[str, ...]) -> None:
-    """Kick off model training with the provided configuration file."""
+    """Kick off model training with the provided configuration file.
+
+    Args:
+        config_path: Optional path to a YAML training configuration.
+        overrides: Hydra-style ``key=value`` overrides appended on the command line.
+    """
 
     from gcpvqvae.system.train import train as run_train
 
@@ -190,7 +205,12 @@ def train_command(config_path: Optional[Path], overrides: Tuple[str, ...]) -> No
 )
 @click.argument("overrides", nargs=-1, metavar="[OVERRIDE]...", type=str)
 def train_gpcnet_command(config_path: Optional[Path], overrides: Tuple[str, ...]) -> None:
-    """Launch GCPNet-only pretraining from the CLI."""
+    """Launch GCPNet-only pretraining from the CLI.
+
+    Args:
+        config_path: Optional path to the GCPNet pretraining configuration.
+        overrides: Hydra-style ``key=value`` overrides appended on the command line.
+    """
 
     from gcpvqvae.system.train_gcpnet import train as run_train_gcpnet
 
@@ -232,7 +252,13 @@ def train_gpcnet_command(config_path: Optional[Path], overrides: Tuple[str, ...]
 def encode_command(
     input_path: Path, output_path: Optional[Path], chain_id: Optional[str]
 ) -> None:
-    """Placeholder implementation for the encode sub-command."""
+    """Placeholder implementation for the encode sub-command.
+
+    Args:
+        input_path: File or directory containing structures to encode.
+        output_path: Optional location for the token archive.
+        chain_id: Optional chain identifier filter.
+    """
 
     _feature_unavailable("Encoding")
 
@@ -260,7 +286,12 @@ def encode_command(
     help="Destination mmCIF file for reconstructed coordinates.",
 )
 def decode_command(tokens: Path, output_path: Optional[Path]) -> None:
-    """Placeholder implementation for the decode sub-command."""
+    """Placeholder implementation for the decode sub-command.
+
+    Args:
+        tokens: Path to a compressed token archive.
+        output_path: Optional destination for reconstructed coordinates.
+    """
 
     _feature_unavailable("Decoding")
 
@@ -283,7 +314,12 @@ def decode_command(tokens: Path, output_path: Optional[Path]) -> None:
 )
 @click.argument("overrides", nargs=-1, metavar="[OVERRIDE]...", type=str)
 def eval_command(config: Path, overrides: Tuple[str, ...]) -> None:
-    """Run model evaluation for a specified configuration."""
+    """Run model evaluation for a specified configuration.
+
+    Args:
+        config: Path to the evaluation YAML file.
+        overrides: Hydra-style overrides applied before evaluation.
+    """
 
     from gcpvqvae.system.eval import evaluate
 
@@ -313,7 +349,12 @@ def eval_command(config: Path, overrides: Tuple[str, ...]) -> None:
 )
 @click.argument("overrides", nargs=-1, metavar="[OVERRIDE]...", type=str)
 def validate_config_command(config: Path, overrides: Tuple[str, ...]) -> None:
-    """Validate a configuration file and print a detailed report."""
+    """Validate a configuration file and print a detailed report.
+
+    Args:
+        config: Path to the configuration YAML file.
+        overrides: Hydra-style overrides evaluated alongside ``config``.
+    """
 
     from gcpvqvae.system.config_validation import format_report, validate_config
 

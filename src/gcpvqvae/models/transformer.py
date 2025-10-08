@@ -10,17 +10,20 @@ from torch import Tensor, nn
 
 
 def _split_heads(x: Tensor, num_heads: int) -> Tensor:
+    """Reshape ``(B, L, D)`` into ``(B, H, L, D/H)`` for attention."""
     batch, length, dim = x.shape
     head_dim = dim // num_heads
     return x.view(batch, length, num_heads, head_dim).transpose(1, 2)
 
 
 def _merge_heads(x: Tensor) -> Tensor:
+    """Inverse of :func:`_split_heads` combining head dimensions."""
     batch, heads, length, head_dim = x.shape
     return x.transpose(1, 2).reshape(batch, length, heads * head_dim)
 
 
 def _rotate_half(x: Tensor) -> Tensor:
+    """Swap even/odd components to implement rotary embeddings."""
     x1, x2 = x[..., ::2], x[..., 1::2]
     return torch.stack((-x2, x1), dim=-1).reshape_as(x)
 
@@ -34,6 +37,7 @@ class RotaryEmbedding(nn.Module):
         self.register_buffer("inv_freq", inv_freq, persistent=False)
 
     def forward(self, seq_len: int, *, device: torch.device, dtype: torch.dtype) -> Tuple[Tensor, Tensor]:
+        """Return rotary cosine and sine tables for the provided sequence length."""
         positions = torch.arange(seq_len, device=device, dtype=self.inv_freq.dtype)
         freqs = torch.einsum("i,j->ij", positions, self.inv_freq)
         cos = torch.cos(freqs).to(dtype)
@@ -44,6 +48,7 @@ class RotaryEmbedding(nn.Module):
 
 
 def apply_rotary(q: Tensor, k: Tensor, cos: Tensor, sin: Tensor) -> Tuple[Tensor, Tensor]:
+    """Apply rotary positional embeddings to query/key tensors."""
     cos = cos.unsqueeze(0).unsqueeze(0)
     sin = sin.unsqueeze(0).unsqueeze(0)
     q_rot = (q * cos) + (_rotate_half(q) * sin)
@@ -85,6 +90,7 @@ class MultiHeadAttention(nn.Module):
         self.rope = rope
 
     def _repeat_kv(self, tensor: Tensor) -> Tensor:
+        """Tile key/value heads when using grouped-query attention."""
         if self.groups == 1:
             return tensor
         return tensor.unsqueeze(2).repeat(1, 1, self.groups, 1, 1).reshape(
@@ -92,6 +98,7 @@ class MultiHeadAttention(nn.Module):
         )
 
     def forward(self, x: Tensor, *, attn_mask: Optional[Tensor] = None) -> Tensor:
+        """Compute attention outputs for ``x`` with optional mask."""
         batch, length, _ = x.shape
 
         q = _split_heads(self.q_proj(x), self.num_heads)
@@ -133,6 +140,7 @@ class FeedForward(nn.Module):
         )
 
     def forward(self, x: Tensor) -> Tensor:
+        """Apply the position-wise feed-forward network."""
         return self.net(x)
 
 
@@ -160,6 +168,7 @@ class TransformerBlock(nn.Module):
         self.ffn = FeedForward(dim, ffn_multiplier, dropout)
 
     def forward(self, x: Tensor, *, attn_mask: Optional[Tensor]) -> Tensor:
+        """Execute a single transformer block with pre-layer norm."""
         x = x + self.attn(self.norm1(x), attn_mask=attn_mask)
         x = x + self.ffn(self.norm2(x))
         return x
@@ -220,6 +229,7 @@ class GCPTokensTransformer(nn.Module):
         self.final_norm = nn.LayerNorm(config.model_dim)
 
     def forward(self, x: Tensor, *, mask: Optional[Tensor] = None) -> Tensor:
+        """Apply the transformer stack with optional padding mask."""
         if x.ndim != 3:
             raise ValueError("Inputs must have shape (batch, length, features)")
 

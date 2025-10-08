@@ -31,7 +31,14 @@ DEFAULT_GCPNET_PRETRAIN_CONFIG_PATH = _CONFIG_DIR / "gcpnet_pretrain.yaml"
 
 
 def _migrate_gcpnet_config(data: Dict[str, Any]) -> Dict[str, Any]:
-    """Upgrade legacy flat keys to the nested GCPNet configuration schema."""
+    """Upgrade legacy flat keys to the nested GCPNet configuration schema.
+
+    Args:
+        data: Raw configuration dictionary using legacy key names.
+
+    Returns:
+        Updated dictionary compatible with :class:`GCPNetConfig`.
+    """
 
     mapping: Dict[str, tuple[str, ...]] = {
         "node_scalar_dim": ("embedding", "node_scalar_dim"),
@@ -67,7 +74,15 @@ def _migrate_gcpnet_config(data: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def update_dataclass(instance: Any, updates: Dict[str, Any]) -> Any:
-    """Recursively apply ``updates`` to a dataclass ``instance``."""
+    """Recursively apply ``updates`` to a dataclass ``instance``.
+
+    Args:
+        instance: Dataclass instance to mutate.
+        updates: Mapping of attribute names to new values.
+
+    Returns:
+        Mutated dataclass instance (returned for chaining).
+    """
 
     if not dataclasses.is_dataclass(instance) or not isinstance(updates, dict):
         return instance
@@ -87,7 +102,14 @@ def update_dataclass(instance: Any, updates: Dict[str, Any]) -> Any:
 
 
 def build_model_config(raw: Optional[Dict[str, Any]]) -> GCPVQVAEConfig:
-    """Construct a :class:`GCPVQVAEConfig` from a raw dictionary."""
+    """Construct a :class:`GCPVQVAEConfig` from a raw dictionary.
+
+    Args:
+        raw: Optional mapping describing overrides relative to defaults.
+
+    Returns:
+        Fully initialised configuration object with derived fields populated.
+    """
 
     config = GCPVQVAEConfig()
     if raw:
@@ -107,6 +129,17 @@ def build_model_config(raw: Optional[Dict[str, Any]]) -> GCPVQVAEConfig:
 
 
 def _apply_override(target: Dict[str, Any], dotted_key: str, value: Any) -> None:
+    """Apply a dotted override key onto ``target``.
+
+    Args:
+        target: Mutable mapping representing the configuration.
+        dotted_key: Override key using dot-notation for nested fields.
+        value: Value to assign at the specified path.
+
+    Raises:
+        TypeError: If an intermediate path component is not a mapping.
+        ValueError: If the override key is empty.
+    """
     parts = [part for part in dotted_key.split(".") if part]
     if not parts:
         raise ValueError("Override key must not be empty")
@@ -127,6 +160,17 @@ def _apply_override(target: Dict[str, Any], dotted_key: str, value: Any) -> None
 
 
 def _parse_override(override: str) -> tuple[str, Any]:
+    """Parse a ``key=value`` override into its key and decoded value.
+
+    Args:
+        override: String following ``key=value`` syntax.
+
+    Returns:
+        Tuple ``(key, value)`` where ``value`` is decoded using YAML semantics.
+
+    Raises:
+        ValueError: If the override string does not contain ``=``.
+    """
     if "=" not in override:
         raise ValueError(f"Invalid override '{override}': expected key=value syntax")
     key, raw_value = override.split("=", 1)
@@ -136,6 +180,18 @@ def _parse_override(override: str) -> tuple[str, Any]:
 
 
 def _fallback_compose(config_path: Path, overrides: Iterable[str]) -> Dict[str, Any]:
+    """Compose configuration using pure YAML when Hydra is unavailable.
+
+    Args:
+        config_path: Path to the base configuration file.
+        overrides: Iterable of override strings.
+
+    Returns:
+        Dictionary containing the merged configuration.
+
+    Raises:
+        TypeError: If the base configuration is not a mapping.
+    """
     with open(config_path, "r", encoding="utf-8") as handle:
         base = yaml.safe_load(handle) or {}
     if not isinstance(base, dict):
@@ -151,18 +207,17 @@ def _fallback_compose(config_path: Path, overrides: Iterable[str]) -> Dict[str, 
 def compose_overrides(config_path: Path, overrides: Iterable[str]) -> Dict[str, Any]:
     """Load ``config_path`` and apply Hydra-style ``overrides``.
 
-    Parameters
-    ----------
-    config_path:
-        Base configuration file to load.
-    overrides:
-        Iterable of override strings following Hydra's ``key=value`` syntax.
+    Args:
+        config_path: Base configuration file to load.
+        overrides: Iterable of override strings following Hydra ``key=value`` syntax.
 
-    Returns
-    -------
-    Dict[str, Any]
-        A plain Python dictionary with all overrides applied and interpolations
-        resolved.
+    Returns:
+        Plain Python dictionary with overrides applied and interpolations resolved.
+
+    Raises:
+        FileNotFoundError: If ``config_path`` does not exist.
+        ModuleNotFoundError: If Hydra is available but OmegaConf cannot be imported.
+        TypeError: If Hydra returns a non-mapping configuration.
     """
 
     config_path = Path(config_path)
@@ -203,4 +258,3 @@ __all__ = [
     "DEFAULT_TRAIN_CONFIG_PATH",
     "DEFAULT_GCPNET_PRETRAIN_CONFIG_PATH",
 ]
-
